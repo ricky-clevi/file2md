@@ -1,0 +1,32 @@
+{
+  "name": "doc-to-markdown-converter",
+  "version": "1.0.0",
+  "description": "A Node.js library for converting various document types (PDF, DOCX, XLSX, PPTX) into Markdown",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node test.js",
+    "start": "node test.js",
+    "convert": "node cli.js"
+  },
+  "keywords": [
+    "markdown",
+    "converter",
+    "pdf",
+    "docx",
+    "xlsx",
+    "pptx",
+    "document"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "xml2js": "^0.6.2",
+    "pdf-parse": "^1.1.1",
+    "pdf2pic": "^2.1.4",
+    "file-type": "^16.5.4"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
