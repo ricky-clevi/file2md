@@ -1,0 +1,7 @@
+node_modules/
+  files/
+  *.md
+  test.js
+  .git/
+  .vscode/
+  .DS_Store

@@ -1,5 +1,5 @@
 {
-  "name": "doc-to-markdown-converter",
+  "name": "file2md",
   "version": "1.0.0",
   "description": "A Node.js library for converting various document types (PDF, DOCX, XLSX, PPTX) into Markdown",
   "main": "src/index.js",
