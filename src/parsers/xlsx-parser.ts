@@ -33,14 +33,14 @@ interface WorkbookSheet {
 }
 
 interface SharedStringItem {
-  readonly t?: readonly [string];
-  readonly r?: readonly Array<{ readonly t?: readonly [string] }>;
+  readonly t?: [string];
+  readonly r?: Array<{ readonly t?: [string] }>;
 }
 
 interface CellFormat {
-  readonly fontId: number;
-  readonly fillId: number;
-  readonly alignment: string;
+  fontId: number;
+  fillId: number;
+  alignment: string;
 }
 
 interface FontData {

@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { fileTypeFromBuffer } from 'file-type';
 import { Buffer } from 'node:buffer';
+const fileType = require('file-type');
 import { ImageExtractor } from './utils/image-extractor.js';
 import { ChartExtractor } from './utils/chart-extractor.js';
 import { parsePdf } from './parsers/pdf-parser.js';
@@ -44,7 +44,7 @@ export async function convert(input, options = {}) {
                 buffer = await fs.readFile(input);
             }
             catch (error) {
-                if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+                if (error?.code === 'ENOENT') {
                     throw new FileNotFoundError(input);
                 }
                 throw new InvalidFileError(`Failed to read file: ${input}`, error);
@@ -57,14 +57,14 @@ export async function convert(input, options = {}) {
             throw new InvalidFileError('Input must be a file path (string) or Buffer');
         }
         // Detect file type
-        const fileType = await fileTypeFromBuffer(buffer);
-        if (!fileType) {
-            throw new InvalidFileError('Unable to determine file type from buffer');
+        const detectedType = await fileType.fromBuffer(buffer);
+        if (!detectedType) {
+            throw new UnsupportedFormatError('unknown');
         }
         // Validate supported format
         const supportedMimeTypes = Object.values(SUPPORTED_MIME_TYPES);
-        if (!supportedMimeTypes.includes(fileType.mime)) {
-            throw new UnsupportedFormatError(fileType.mime);
+        if (!supportedMimeTypes.includes(detectedType.mime)) {
+            throw new UnsupportedFormatError(detectedType.mime);
         }
         // Setup extractors
         const { imageDir = 'images', preserveLayout = true, extractCharts = true, extractImages = true, maxPages } = options;
@@ -76,7 +76,7 @@ export async function convert(input, options = {}) {
         let charts = [];
         let pageCount = 1;
         let additionalMetadata = {};
-        switch (fileType.mime) {
+        switch (detectedType.mime) {
             case SUPPORTED_MIME_TYPES.PDF: {
                 const result = await parsePdf(buffer, imageExtractor, { maxPages, preserveLayout });
                 markdown = result.markdown;
@@ -112,15 +112,15 @@ export async function convert(input, options = {}) {
             }
             default: {
                 // This should never happen due to earlier validation, but TypeScript requires it
-                const exhaustiveCheck = fileType.mime;
+                const exhaustiveCheck = detectedType.mime;
                 throw new UnsupportedFormatError(exhaustiveCheck);
             }
         }
         const endTime = Date.now();
         // Build metadata
         const metadata = {
-            fileType: fileType.ext.toUpperCase(),
-            mimeType: fileType.mime,
+            fileType: detectedType.ext.toUpperCase(),
+            mimeType: detectedType.mime,
             pageCount,
             imageCount: images.length,
             chartCount: charts.length,

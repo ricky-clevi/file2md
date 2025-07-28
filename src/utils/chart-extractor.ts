@@ -35,30 +35,30 @@ interface ChartXmlResult {
 }
 
 interface ChartSeriesData {
-  readonly 'c:ser'?: readonly Array<{
-    readonly 'c:tx'?: readonly [{
-      readonly 'c:strRef': readonly [{
-        readonly 'c:strCache'?: readonly [{
-          readonly 'c:pt': readonly Array<{
-            readonly 'c:v': readonly [string];
+  readonly 'c:ser'?: Array<{
+    readonly 'c:tx'?: [{
+      readonly 'c:strRef': [{
+        readonly 'c:strCache'?: [{
+          readonly 'c:pt': Array<{
+            readonly 'c:v': [string];
           }>;
         }];
       }];
     }];
-    readonly 'c:val'?: readonly [{
-      readonly 'c:numRef': readonly [{
-        readonly 'c:numCache'?: readonly [{
-          readonly 'c:pt': readonly Array<{
-            readonly 'c:v': readonly [string];
+    readonly 'c:val'?: [{
+      readonly 'c:numRef': [{
+        readonly 'c:numCache'?: [{
+          readonly 'c:pt': Array<{
+            readonly 'c:v': [string];
           }>;
         }];
       }];
     }];
-    readonly 'c:cat'?: readonly [{
-      readonly 'c:strRef': readonly [{
-        readonly 'c:strCache'?: readonly [{
-          readonly 'c:pt': readonly Array<{
-            readonly 'c:v': readonly [string];
+    readonly 'c:cat'?: [{
+      readonly 'c:strRef': [{
+        readonly 'c:strCache'?: [{
+          readonly 'c:pt': Array<{
+            readonly 'c:v': [string];
           }>;
         }];
       }];

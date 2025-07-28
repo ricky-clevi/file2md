@@ -34,9 +34,9 @@ interface SlideFile {
 }
 
 interface SlideElement {
-  readonly type: ElementType;
-  readonly content: string | unknown;
-  readonly position?: Position;
+  type: ElementType;
+  content: string | unknown;
+  position?: Position;
 }
 
 interface SlideRow {

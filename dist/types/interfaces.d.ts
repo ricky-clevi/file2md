@@ -133,13 +133,13 @@ export type TextAlignment = 'left' | 'center' | 'right' | 'justify';
  */
 export interface Position {
     /** X coordinate */
-    readonly x: number;
+    x: number;
     /** Y coordinate */
-    readonly y: number;
+    y: number;
     /** Width of the element */
-    readonly width?: number;
+    width?: number;
     /** Height of the element */
-    readonly height?: number;
+    height?: number;
 }
 /**
  * Layout element types
