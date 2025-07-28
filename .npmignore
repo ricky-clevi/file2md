@@ -1,7 +1,57 @@
+# Source files
+src/
+tsconfig*.json
+jest.config.js
+.eslintrc.js
+
+# Development files
+tests/
+coverage/
+.nyc_output/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
+
+# Git files
+.git/
+.gitignore
+
+# Development dependencies
 node_modules/
-  files/
-  *.md
-  test.js
-  .git/
-  .vscode/
-  .DS_Store
+
+# Build artifacts
+*.tsbuildinfo
+
+# Example files
+examples/
+docs/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+
+# Package manager files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Files directory (test files)
+files/
+
+# Other development files
+TODO.md
+CHANGELOG.md

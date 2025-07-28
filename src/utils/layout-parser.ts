@@ -1,11 +1,32 @@
-class LayoutParser {
-  constructor() {
-    this.tableCounter = 0;
-  }
+import type { 
+  TableData, 
+  CellData, 
+  RowData, 
+  ListData, 
+  ListItem, 
+  Position, 
+  LayoutElement, 
+  TextAlignment 
+} from '../types/interfaces.js';
 
-  // Enhanced table parsing with merged cells and styling
-  parseAdvancedTable(tableData, options = {}) {
-    if (!tableData || !tableData.rows || tableData.rows.length === 0) {
+export interface TableFormatOptions {
+  readonly preserveAlignment?: boolean;
+  readonly showBorders?: boolean;
+  readonly preserveColors?: boolean;
+}
+
+export interface ColumnData {
+  readonly content: string;
+}
+
+export class LayoutParser {
+  private tableCounter: number = 0;
+
+  /**
+   * Parse an advanced table with merged cells and styling
+   */
+  parseAdvancedTable(tableData: TableData, options: TableFormatOptions = {}): string {
+    if (!tableData.rows || tableData.rows.length === 0) {
       return '';
     }
 
@@ -28,7 +49,12 @@ class LayoutParser {
 
       // Process each cell
       for (let colIndex = 0; colIndex < colCount; colIndex++) {
-        const cell = row.cells[colIndex] || {};
+        const cell = row.cells[colIndex];
+        if (!cell) {
+          rowMarkdown += '  |';
+          continue;
+        }
+        
         let cellContent = cell.text || '';
         
         // Handle merged cells
@@ -48,13 +74,16 @@ class LayoutParser {
         if (preserveAlignment && cell.alignment) {
           const cellWidth = Math.max(cellContent.length, 10);
           switch (cell.alignment) {
-            case 'center':
+            case 'center': {
               const padding = Math.floor((cellWidth - cellContent.length) / 2);
               cellContent = ' '.repeat(padding) + cellContent + ' '.repeat(padding);
               break;
-            case 'right':
+            }
+            case 'right': {
               cellContent = cellContent.padStart(cellWidth);
               break;
+            }
+            // 'left' and 'justify' use default formatting
           }
         }
 
@@ -72,11 +101,11 @@ class LayoutParser {
       if (rowIndex === 0) {
         let separator = '|';
         for (let i = 0; i < colCount; i++) {
-          const cell = rows[0].cells[i] || {};
+          const cell = rows[0]?.cells?.[i];
           let sepContent = ' --- ';
           
           // Apply alignment in separator
-          if (preserveAlignment && cell.alignment) {
+          if (preserveAlignment && cell?.alignment) {
             switch (cell.alignment) {
               case 'center':
                 sepContent = ':---:';
@@ -99,16 +128,19 @@ class LayoutParser {
     return markdown;
   }
 
-  // Parse lists with proper nesting
-  parseList(listData, isOrdered = false) {
-    if (!listData || !listData.items) return '';
+  /**
+   * Parse lists with proper nesting
+   */
+  parseList(listData: ListData): string {
+    if (!listData.items || listData.items.length === 0) return '';
 
     let markdown = '';
     
-    const processListItems = (items, level = 0) => {
+    const processListItems = (items: readonly ListItem[], level: number = 0): string => {
+      let result = '';
       for (const item of items) {
         const indent = '  '.repeat(level);
-        const marker = isOrdered ? '1.' : '-';
+        const marker = listData.isOrdered ? '1.' : '-';
         
         let itemText = item.text || '';
         
@@ -116,26 +148,27 @@ class LayoutParser {
         if (item.bold) itemText = `**${itemText}**`;
         if (item.italic) itemText = `*${itemText}*`;
         
-        markdown += `${indent}${marker} ${itemText}\n`;
+        result += `${indent}${marker} ${itemText}\n`;
         
         // Handle nested lists
         if (item.children && item.children.length > 0) {
-          markdown += processListItems(item.children, level + 1);
+          result += processListItems(item.children, level + 1);
         }
       }
-      return markdown;
+      return result;
     };
 
     return processListItems(listData.items);
   }
 
-  // Create text box representation
-  createTextBox(content, position = {}) {
-    const { x, y, width, height } = position;
+  /**
+   * Create text box representation
+   */
+  createTextBox(content: string, position?: Position): string {
     let markdown = '';
     
-    if (x || y) {
-      markdown += `<!-- Position: x=${x || 0}, y=${y || 0} -->\n`;
+    if (position && (position.x || position.y)) {
+      markdown += `<!-- Position: x=${position.x || 0}, y=${position.y || 0} -->\n`;
     }
     
     markdown += '> **Text Box**\n';
@@ -150,8 +183,10 @@ class LayoutParser {
     return markdown + '\n';
   }
 
-  // Create multi-column layout approximation
-  createColumns(columns) {
+  /**
+   * Create multi-column layout approximation
+   */
+  createColumns(columns: readonly ColumnData[]): string {
     if (!columns || columns.length <= 1) {
       return columns[0]?.content || '';
     }
@@ -190,16 +225,20 @@ class LayoutParser {
     return markdown + '\n';
   }
 
-  // Parse headers and footers
-  parseHeaderFooter(content, type = 'header') {
+  /**
+   * Parse headers and footers
+   */
+  parseHeaderFooter(content: string, type: 'header' | 'footer' = 'header'): string {
     if (!content) return '';
     
     const marker = type === 'header' ? '🔝' : '🔻';
     return `<!-- Document ${type} -->\n> ${marker} ${content}\n\n`;
   }
 
-  // Create divider/separator
-  createDivider(style = 'simple') {
+  /**
+   * Create divider/separator
+   */
+  createDivider(style: 'simple' | 'thick' | 'dashed' | 'dotted' = 'simple'): string {
     switch (style) {
       case 'thick':
         return '\n═══════════════════════════════════════\n\n';
@@ -212,35 +251,54 @@ class LayoutParser {
     }
   }
 
-  // Calculate relative positioning
-  calculateRelativePosition(elements) {
+  /**
+   * Calculate relative positioning for layout elements
+   */
+  calculateRelativePosition<T extends { position?: Position }>(elements: readonly T[]): T[] {
     // Sort elements by their Y position, then X position
-    return elements.sort((a, b) => {
-      const yDiff = (a.position?.y || 0) - (b.position?.y || 0);
+    return [...elements].sort((a, b) => {
+      const aY = a.position?.y || 0;
+      const bY = b.position?.y || 0;
+      const aX = a.position?.x || 0;
+      const bX = b.position?.x || 0;
+      
+      const yDiff = aY - bY;
       if (Math.abs(yDiff) < 50) { // Same "row"
-        return (a.position?.x || 0) - (b.position?.x || 0);
+        return aX - bX;
       }
       return yDiff;
     });
   }
 
-  // Format with approximate font sizes using headers
-  formatWithSize(text, fontSize) {
+  /**
+   * Format text with approximate font sizes using headers
+   */
+  formatWithSize(text: string, fontSize: number | string): string {
     if (!fontSize || fontSize === 'normal') return text;
     
+    const size = typeof fontSize === 'string' ? parseFloat(fontSize) : fontSize;
+    
     // Map font sizes to markdown headers (approximate)
-    if (fontSize >= 24) return `# ${text}`;
-    if (fontSize >= 20) return `## ${text}`;
-    if (fontSize >= 16) return `### ${text}`;
-    if (fontSize >= 14) return `#### ${text}`;
-    if (fontSize <= 10) return `<small>${text}</small>`;
+    if (size >= 24) return `# ${text}`;
+    if (size >= 20) return `## ${text}`;
+    if (size >= 16) return `### ${text}`;
+    if (size >= 14) return `#### ${text}`;
+    if (size <= 10) return `<small>${text}</small>`;
     
     return text;
   }
 
-  reset() {
+  /**
+   * Reset internal counters
+   */
+  reset(): void {
     this.tableCounter = 0;
   }
-}
 
-module.exports = LayoutParser;
+  /**
+   * Get current table counter
+   */
+  get currentTableCount(): number {
+    return this.tableCounter;
+  }
+}

@@ -1,30 +1,59 @@
-const fs = require('fs');
-const path = require('path');
+import path from 'node:path';
+import type { Buffer } from 'node:buffer';
 
-class PDFExtractor {
-  constructor(imageExtractor) {
+import type { PageData } from '../types/interfaces.js';
+import { ImageExtractionError } from '../types/errors.js';
+import type { ImageExtractor } from './image-extractor.js';
+
+interface PDFConvertResult {
+  readonly page: number;
+  readonly path: string;
+}
+
+interface TableRow {
+  readonly cells: readonly string[];
+}
+
+export interface PDFParseOptions {
+  readonly maxPages?: number;
+  readonly preserveLayout?: boolean;
+}
+
+export interface PDFParseResult {
+  readonly markdown: string;
+  readonly images: readonly import('../types/interfaces.js').ImageData[];
+  readonly pageCount: number;
+  readonly metadata: Record<string, unknown>;
+}
+
+export class PDFExtractor {
+  private readonly imageExtractor: ImageExtractor;
+  private pageCounter: number = 0;
+
+  constructor(imageExtractor: ImageExtractor) {
     this.imageExtractor = imageExtractor;
-    this.pageCounter = 0;
   }
 
-  async extractImagesFromPDF(buffer) {
-    // For now, convert entire PDF pages to images as fallback
-    // This gives us visual preservation when text extraction fails
+  /**
+   * Extract images from PDF by converting pages to images
+   */
+  async extractImagesFromPDF(buffer: Buffer): Promise<readonly PageData[]> {
     try {
-      const pdf2pic = require('pdf2pic');
+      // Dynamic import to handle potential missing dependency
+      const pdf2pic = await import('pdf2pic');
       
       const convert = pdf2pic.fromBuffer(buffer, {
         density: 150,           // Output resolution
         saveFilename: "page",
-        savePath: this.imageExtractor.outputDir,
+        savePath: this.imageExtractor.imageDirectory,
         format: "png",
         width: 800,            // Max width
         height: 1200           // Max height
       });
       
-      const results = await convert.bulk(-1); // Convert all pages
+      const results = await convert.bulk(-1) as PDFConvertResult[]; // Convert all pages
       
-      const extractedPages = [];
+      const extractedPages: PageData[] = [];
       for (const result of results) {
         if (result.path) {
           const filename = path.basename(result.path);
@@ -37,19 +66,20 @@ class PDFExtractor {
       }
       
       return extractedPages;
-    } catch (error) {
-      console.warn('Failed to convert PDF pages to images:', error.message);
-      return [];
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new ImageExtractionError(`Failed to convert PDF pages to images: ${message}`, error as Error);
     }
   }
 
-  async enhanceTextWithLayout(text, pdfData) {
-    // Attempt to detect and preserve basic layout patterns
+  /**
+   * Enhance text with layout detection
+   */
+  async enhanceTextWithLayout(text: string, pdfData?: unknown): Promise<string> {
     const lines = text.split('\n');
     let enhancedText = '';
-    let currentSection = '';
     let inTable = false;
-    let tableRows = [];
+    let tableRows: TableRow[] = [];
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -83,7 +113,7 @@ class PDFExtractor {
         if (!inTable) {
           inTable = true;
         }
-        tableRows.push(this.parseTableRow(line));
+        tableRows.push({ cells: this.parseTableRow(line) });
         continue;
       } else if (inTable) {
         // End of table
@@ -110,7 +140,7 @@ class PDFExtractor {
     return enhancedText;
   }
 
-  isLikelyHeading(line, allLines, index) {
+  private isLikelyHeading(line: string, allLines: readonly string[], index: number): boolean {
     // Check if line looks like a heading
     if (line.length > 80) return false; // Too long to be a heading
     if (line.length < 3) return false;  // Too short
@@ -130,14 +160,14 @@ class PDFExtractor {
     return false;
   }
 
-  determineHeadingLevel(line) {
+  private determineHeadingLevel(line: string): number {
     if (line === line.toUpperCase()) return 1; // All caps = major heading
     if (line.endsWith(':')) return 2;         // Ends with colon = section
     if (line.length < 30) return 3;           // Short = subsection
     return 2; // Default
   }
 
-  isLikelyTableRow(line) {
+  private isLikelyTableRow(line: string): boolean {
     // Look for patterns that suggest tabular data
     const patterns = [
       /\t+/,                    // Tab separated
@@ -150,9 +180,9 @@ class PDFExtractor {
     return patterns.some(pattern => pattern.test(line));
   }
 
-  parseTableRow(line) {
+  private parseTableRow(line: string): readonly string[] {
     // Split line into columns based on various separators
-    let columns = [];
+    let columns: string[] = [];
     
     if (line.includes('\t')) {
       columns = line.split('\t').map(col => col.trim());
@@ -166,11 +196,11 @@ class PDFExtractor {
     return columns.filter(col => col.length > 0);
   }
 
-  formatTableRows(rows) {
+  private formatTableRows(rows: readonly TableRow[]): string {
     if (rows.length === 0) return '';
     
     // Find maximum number of columns
-    const maxCols = Math.max(...rows.map(row => row.length));
+    const maxCols = Math.max(...rows.map(row => row.cells.length));
     
     let markdown = '';
     
@@ -179,7 +209,7 @@ class PDFExtractor {
       let rowMarkdown = '|';
       
       for (let j = 0; j < maxCols; j++) {
-        const cell = row[j] || '';
+        const cell = row.cells[j] || '';
         rowMarkdown += ` ${cell} |`;
       }
       
@@ -198,7 +228,7 @@ class PDFExtractor {
     return markdown + '\n';
   }
 
-  isListItem(line) {
+  private isListItem(line: string): boolean {
     // Check for various list patterns
     const listPatterns = [
       /^\s*[-•·]\s+/,           // Bullet points
@@ -210,7 +240,7 @@ class PDFExtractor {
     return listPatterns.some(pattern => pattern.test(line));
   }
 
-  formatListItem(line) {
+  private formatListItem(line: string): string {
     // Convert various list formats to markdown
     if (/^\s*\d+\.\s+/.test(line)) {
       return line.replace(/^\s*\d+\.\s+/, '1. ');
@@ -223,7 +253,10 @@ class PDFExtractor {
     }
   }
 
-  async createPageBreaks(pageImages) {
+  /**
+   * Create page breaks with images
+   */
+  async createPageBreaks(pageImages: readonly PageData[]): Promise<string> {
     let markdown = '';
     
     for (let i = 0; i < pageImages.length; i++) {
@@ -240,9 +273,17 @@ class PDFExtractor {
     return markdown;
   }
 
-  reset() {
+  /**
+   * Reset internal counters
+   */
+  reset(): void {
     this.pageCounter = 0;
   }
-}
 
-module.exports = PDFExtractor;
+  /**
+   * Get current page counter
+   */
+  get currentPageCount(): number {
+    return this.pageCounter;
+  }
+}
