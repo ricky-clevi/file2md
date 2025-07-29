@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { parseStringPromise } from 'xml2js';
+import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
 import type { ImageExtractor } from '../utils/image-extractor.js';
@@ -266,7 +267,8 @@ async function extractAdvancedSlideContent(
       
       for (const img of slideImages) {
         if (img.savedPath) {
-          markdown += imageExtractor.getImageMarkdown(`Slide ${slideNumber} Image`, img.savedPath) + '\n\n';
+          const filename = path.basename(img.savedPath);
+          markdown += imageExtractor.getImageMarkdown(`Slide ${slideNumber} Image`, filename) + '\n\n';
         }
       }
     }
@@ -318,7 +320,8 @@ function formatSlideElement(
     
     case 'image': {
       const imagePath = element.content as string;
-      return imageExtractor.getImageMarkdown('Slide Image', imagePath);
+      const filename = path.basename(imagePath);
+      return imageExtractor.getImageMarkdown('Slide Image', filename);
     }
     
     default:

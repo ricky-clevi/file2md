@@ -66,9 +66,16 @@ export class LayoutParser {
           // Note: Markdown doesn't support rowspan, so we approximate
         }
 
-        // Apply text formatting
-        if (cell.bold) cellContent = `**${cellContent}**`;
-        if (cell.italic) cellContent = `*${cellContent}*`;
+        // Process markdown formatting in cell content
+        cellContent = this.processCellFormatting(cellContent);
+        
+        // Apply additional text formatting from cell properties
+        if (cell.bold && !cellContent.includes('**')) {
+          cellContent = `**${cellContent}**`;
+        }
+        if (cell.italic && !cellContent.includes('*')) {
+          cellContent = `*${cellContent}*`;
+        }
         
         // Apply alignment (approximate with spaces)
         if (preserveAlignment && cell.alignment) {
@@ -284,6 +291,35 @@ export class LayoutParser {
     if (size >= 16) return `### ${text}`;
     if (size >= 14) return `#### ${text}`;
     if (size <= 10) return `<small>${text}</small>`;
+    
+    return text;
+  }
+
+  /**
+   * Process markdown formatting within table cells
+   */
+  private processCellFormatting(text: string): string {
+    if (!text) return text;
+    
+    // Convert headers to bold text (since headers don't work well in table cells)
+    text = text.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
+      const level = hashes.length;
+      // Convert headers to bold text with size indicators
+      if (level <= 2) {
+        return `**${content.toUpperCase()}**`; // Major headers become uppercase bold
+      } else {
+        return `**${content}**`; // Minor headers become bold
+      }
+    });
+    
+    // Ensure bold and italic formatting is preserved
+    // Bold: **text** or __text__
+    text = text.replace(/\*\*([^*]+)\*\*/g, '**$1**');
+    text = text.replace(/__([^_]+)__/g, '**$1**');
+    
+    // Italic: *text* or _text_ (but not within bold)
+    text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '*$1*');
+    text = text.replace(/(?<!_)_([^_]+)_(?!_)/g, '*$1*');
     
     return text;
   }

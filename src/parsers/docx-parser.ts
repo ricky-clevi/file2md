@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { parseStringPromise } from 'xml2js';
+import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
 import type { ImageExtractor } from '../utils/image-extractor.js';
@@ -348,7 +349,9 @@ async function extractImageFromRun(
   if (extractedImages.length > 0) {
     const img = extractedImages.find(img => img.savedPath);
     if (img) {
-      return imageExtractor.getImageMarkdown('Document Image', img.savedPath);
+      // Extract just the filename from the full path
+      const filename = path.basename(img.savedPath);
+      return imageExtractor.getImageMarkdown('Document Image', filename);
     }
   }
   return null;

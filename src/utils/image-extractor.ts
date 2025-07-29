@@ -79,7 +79,8 @@ export class ImageExtractor {
       const key = basePath + originalPath;
       this.extractedImages.set(key, filename);
       
-      return filename;
+      // Return the full absolute path, not just the filename
+      return path.resolve(fullPath);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new ImageExtractionError(`Failed to save image ${filename}: ${message}`, error as Error);
@@ -120,13 +121,15 @@ export class ImageExtractor {
   }
 
   /**
-   * Create markdown image reference
+   * Create markdown image reference using HTML img tag for better compatibility
    */
   getImageMarkdown(description: string = 'Image', imagePath?: string): string {
     if (imagePath) {
-      return `![${description}](${this.outputDir}/${imagePath})`;
+      // Use relative path - just the directory name, not the full path
+      const relativePath = `./images/${imagePath}`;
+      return `<img src="${relativePath}" alt="${description}" style="max-width:100%;height:auto" />`;
     }
-    return `![${description}](image-not-found)`;
+    return `<img src="./image-not-found" alt="${description}" />`;
   }
 
   /**
