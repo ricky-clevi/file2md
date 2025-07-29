@@ -87,7 +87,24 @@ export async function parseDocx(
     const xmlContent = await documentXml.async('string');
     const result = await parseStringPromise(xmlContent) as DocxDocument;
     
-    const body = result['w:document'][0]['w:body'][0];
+    // Handle both array and non-array XML parsing results
+    let document: any = result['w:document'];
+    if (Array.isArray(document)) {
+      document = document[0];
+    }
+    
+    if (!document) {
+      throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
+    }
+    
+    let body: any = document['w:body'];
+    if (Array.isArray(body)) {
+      body = body[0];
+    }
+    
+    if (!body) {
+      throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document body', new Error('Missing document body'));
+    }
     let markdown = '';
     
     // Process paragraphs
