@@ -228,34 +228,25 @@ async function extractAdvancedSlideContent(
     // Sort elements by position (top to bottom, left to right)
     const sortedElements = layoutParser.calculateRelativePosition(elements);
     
+    // Use improved layout grouping instead of aggressive column detection
     let markdown = '';
-    let currentRow: SlideRow | null = null;
-    const rowThreshold = 50; // EMUs tolerance for same row
     
-    for (const element of sortedElements) {
-      const elementY = element.position?.y || 0;
-      
-      // Check if this element is in the same row as the previous
-      if (currentRow && Math.abs(elementY - currentRow.y) < rowThreshold) {
-        // Same row - add as column
-        currentRow.elements.push(element);
-      } else {
-        // New row
-        if (currentRow && currentRow.elements.length > 0) {
-          // Process previous row
-          markdown += processSlideRow(currentRow, layoutParser, imageExtractor);
-        }
-        
-        currentRow = {
-          y: elementY,
-          elements: [element]
-        };
+    // Group elements into logical sections rather than rows/columns
+    const sections = groupElementsIntoSections(sortedElements);
+    
+    for (const section of sections) {
+      if (section.type === 'title') {
+        markdown += `### ${section.content}\n\n`;
+      } else if (section.type === 'paragraph') {
+        markdown += `${section.content}\n\n`;
+      } else if (section.type === 'table') {
+        markdown += parseSlideTable(section.content, layoutParser) + '\n\n';
+      } else if (section.type === 'image') {
+        const filename = path.basename(section.content as string);
+        markdown += imageExtractor.getImageMarkdown(`Slide ${slideNumber} Image`, filename) + '\n\n';
+      } else if (section.type === 'list') {
+        markdown += section.content + '\n\n';
       }
-    }
-    
-    // Process the last row
-    if (currentRow && currentRow.elements.length > 0) {
-      markdown += processSlideRow(currentRow, layoutParser, imageExtractor);
     }
     
     // If no organized content, fall back to simple extraction
@@ -280,23 +271,62 @@ async function extractAdvancedSlideContent(
   }
 }
 
-function processSlideRow(
-  row: SlideRow,
-  layoutParser: LayoutParser,
-  imageExtractor: ImageExtractor
-): string {
-  if (row.elements.length === 1) {
-    // Single element in row
-    const element = row.elements[0];
-    return formatSlideElement(element, layoutParser, imageExtractor) + '\n\n';
-  } else {
-    // Multiple elements - create columns
-    const columns = row.elements.map(element => ({
-      content: formatSlideElement(element, layoutParser, imageExtractor)
-    }));
+interface ContentSection {
+  type: 'title' | 'paragraph' | 'table' | 'image' | 'list';
+  content: string | unknown;
+  position?: Position;
+}
+
+function groupElementsIntoSections(elements: SlideElement[]): ContentSection[] {
+  const sections: ContentSection[] = [];
+  
+  for (const element of elements) {
+    const content = element.content as string;
     
-    return layoutParser.createColumns(columns) + '\n';
+    if (element.type === 'text') {
+      // Determine if it's a title based on position and characteristics
+      const isTitle = (element.position?.y || 0) < 1000000 && 
+                     content.length < 100 && 
+                     content.length > 0;
+      
+      if (isTitle && !content.includes('\n') && !content.match(/^\d+\./)) {
+        sections.push({
+          type: 'title',
+          content: content.trim(),
+          position: element.position
+        });
+      } else {
+        // Check if it looks like a list item
+        if (content.match(/^[•\-*]\s/) || content.match(/^\d+\.\s/)) {
+          sections.push({
+            type: 'list',
+            content: content.trim(),
+            position: element.position
+          });
+        } else {
+          sections.push({
+            type: 'paragraph',
+            content: content.trim(),
+            position: element.position
+          });
+        }
+      }
+    } else if (element.type === 'table') {
+      sections.push({
+        type: 'table',
+        content: element.content,
+        position: element.position
+      });
+    } else if (element.type === 'image') {
+      sections.push({
+        type: 'image',
+        content: element.content,
+        position: element.position
+      });
+    }
   }
+  
+  return sections;
 }
 
 function formatSlideElement(

@@ -191,43 +191,53 @@ export class LayoutParser {
   }
 
   /**
-   * Create multi-column layout approximation
+   * Create multi-column layout approximation - only for genuine multi-column content
    */
   createColumns(columns: readonly ColumnData[]): string {
     if (!columns || columns.length <= 1) {
       return columns[0]?.content || '';
     }
 
-    let markdown = '<!-- Multi-column layout -->\n\n';
+    // Be much more conservative - only create columns if there's substantial content
+    // and it looks like genuinely different content types
+    const substantialColumns = columns.filter(col => 
+      col.content && col.content.trim().length > 10
+    );
     
-    // Create a table to approximate columns
+    if (substantialColumns.length <= 1) {
+      // Just concatenate content with line breaks
+      return columns.map(col => col.content || '').filter(c => c.trim()).join('\n\n');
+    }
+    
+    // Only create table format if we have 2-4 substantial columns
+    if (substantialColumns.length > 4) {
+      return substantialColumns.map(col => col.content || '').join('\n\n');
+    }
+
+    let markdown = '';
+    
+    // Create a simple side-by-side layout without excessive table structure
     markdown += '|';
-    for (let i = 0; i < columns.length; i++) {
+    for (let i = 0; i < substantialColumns.length; i++) {
       markdown += ` Column ${i + 1} |`;
     }
     markdown += '\n';
     
     markdown += '|';
-    for (let i = 0; i < columns.length; i++) {
+    for (let i = 0; i < substantialColumns.length; i++) {
       markdown += ' --- |';
     }
     markdown += '\n';
     
-    // Find the maximum number of paragraphs in any column
-    const maxParagraphs = Math.max(...columns.map(col => 
-      col.content ? col.content.split('\n\n').length : 0
-    ));
-    
-    // Create rows for each paragraph level
-    for (let p = 0; p < maxParagraphs; p++) {
-      markdown += '|';
-      for (const column of columns) {
-        const paragraphs = column.content ? column.content.split('\n\n') : [];
-        const paragraph = paragraphs[p] || '';
-        markdown += ` ${paragraph.replace(/\n/g, '<br>')} |`;
-      }
-      markdown += '\n';
+    // Create a single row with all content
+    markdown += '|';
+    for (const column of substantialColumns) {
+      const content = column.content || '';
+      // Limit content length to prevent excessive table width
+      const truncated = content.length > 200 ? content.substring(0, 200) + '...' : content;
+      markdown += ` ${truncated.replace(/\n/g, '<br>')} |`;
     }
+    markdown += '\n';
     
     return markdown + '\n';
   }
@@ -259,10 +269,10 @@ export class LayoutParser {
   }
 
   /**
-   * Calculate relative positioning for layout elements
+   * Calculate relative positioning for layout elements with improved grouping
    */
   calculateRelativePosition<T extends { position?: Position }>(elements: readonly T[]): T[] {
-    // Sort elements by their Y position, then X position
+    // Sort elements by their Y position primarily, with much larger threshold for "same row"
     return [...elements].sort((a, b) => {
       const aY = a.position?.y || 0;
       const bY = b.position?.y || 0;
@@ -270,7 +280,8 @@ export class LayoutParser {
       const bX = b.position?.x || 0;
       
       const yDiff = aY - bY;
-      if (Math.abs(yDiff) < 50) { // Same "row"
+      // Increase threshold significantly to avoid over-segmentation
+      if (Math.abs(yDiff) < 200) { // Much larger tolerance for same "section"
         return aX - bX;
       }
       return yDiff;
