@@ -12,3 +12,45 @@ files
 
 .idea
 .vscode
+
+files2markdownapp/node_modules
+files2markdownapp/dist
+files2markdownapp/.claude
+files2markdownapp/.yarn
+files2markdownapp/.pnp
+files2markdownapp/.pnp.*
+files2markdownapp/.yarn/*
+files2markdownapp/!.yarn/patches
+files2markdownapp/!.yarn/plugins
+files2markdownapp/!.yarn/releases
+files2markdownapp/!.yarn/versions
+
+# testing
+files2markdownapp/coverage
+
+# next.js
+files2markdownapp/.next/
+files2markdownapp/out/
+
+# production
+files2markdownapp/build
+
+# misc
+files2markdownapp/.DS_Store
+files2markdownapp/*.pem
+
+# debug
+files2markdownapp/npm-debug.log*
+files2markdownapp/yarn-debug.log*
+files2markdownapp/yarn-error.log*
+files2markdownapp/.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+files2markdownapp/.env*
+
+# vercel
+files2markdownapp/.vercel
+
+# typescript
+files2markdownapp/*.tsbuildinfo
+files2markdownapp/next-env.d.ts
