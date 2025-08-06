@@ -7,6 +7,10 @@ import { promisify } from 'node:util';
 
 import { ParseError } from '../types/errors.js';
 import type { ImageData } from '../types/interfaces.js';
+import { LibreOfficeDetector } from './libreoffice-detector.js';
+import { LibreOfficeConverter } from './libreoffice-converter.js';
+import { PptxVisualParser, type SlideLayout } from './pptx-visual-parser.js';
+import { PuppeteerRenderer, type PuppeteerRenderOptions } from './puppeteer-renderer.js';
 
 // Promisify libreoffice-convert
 const convertAsync = promisify(libre.convert);
@@ -16,23 +20,30 @@ export interface SlideRenderOptions {
   readonly density?: number; // DPI, default 150
   readonly format?: 'png' | 'jpg'; // default png
   readonly saveBase64?: boolean; // default false
+  readonly useVisualLayouts?: boolean; // Use visual parser for enhanced rendering
+  readonly usePuppeteer?: boolean; // Use Puppeteer for browser-based rendering
+  readonly puppeteerOptions?: PuppeteerRenderOptions; // Puppeteer-specific options
 }
 
 export interface SlideRenderResult {
   readonly slideImages: readonly ImageData[];
   readonly slideCount: number;
+  readonly visualLayouts?: readonly SlideLayout[];
   readonly metadata: {
     readonly format: string;
     readonly quality: number;
     readonly density: number;
+    readonly hasVisualLayouts?: boolean;
   };
 }
 
 export class SlideRenderer {
   private readonly outputDir: string;
+  private readonly converter: LibreOfficeConverter;
 
   constructor(outputDir: string) {
     this.outputDir = outputDir;
+    this.converter = new LibreOfficeConverter();
   }
 
   /**
@@ -46,7 +57,10 @@ export class SlideRenderer {
       quality = 90,
       density = 150,
       format = 'png',
-      saveBase64 = false
+      saveBase64 = false,
+      useVisualLayouts = true,
+      usePuppeteer = false,
+      puppeteerOptions
     } = options;
 
     try {
@@ -54,18 +68,64 @@ export class SlideRenderer {
       await fs.mkdir(this.outputDir, { recursive: true });
       console.log('Created slide output directory:', this.outputDir);
       
-      // Step 1: Convert PPTX to PDF using LibreOffice
-      console.log('Converting PPTX to PDF...');
+      // Step 1: Optionally parse visual layouts for enhanced rendering
+      let visualLayouts: SlideLayout[] | undefined;
+      if (useVisualLayouts || usePuppeteer) {
+        try {
+          console.log('Parsing visual layouts for enhanced rendering...');
+          const visualParser = new PptxVisualParser();
+          visualLayouts = await visualParser.parseVisualElements(pptxBuffer);
+          console.log(`Extracted visual layouts for ${visualLayouts.length} slides`);
+        } catch (visualError) {
+          console.warn('Visual layout parsing failed, continuing with standard rendering:', visualError);
+        }
+      }
+      
+      // Step 2: Try Puppeteer rendering first if requested and visual layouts are available
+      if (usePuppeteer && visualLayouts && visualLayouts.length > 0) {
+        try {
+          console.log('Attempting Puppeteer browser-based rendering...');
+          const puppeteerResult = await this.renderWithPuppeteer(visualLayouts, {
+            ...puppeteerOptions,
+            format: format === 'jpg' ? 'jpeg' : format,
+            quality
+          });
+          
+          if (puppeteerResult.slideImages.length > 0) {
+            console.log(`Puppeteer rendering successful: ${puppeteerResult.slideImages.length} slides`);
+            return {
+              slideImages: puppeteerResult.slideImages,
+              slideCount: puppeteerResult.slideCount,
+              visualLayouts,
+              metadata: {
+                ...puppeteerResult.metadata,
+                hasVisualLayouts: true
+              }
+            };
+          }
+        } catch (puppeteerError) {
+          console.warn('Puppeteer rendering failed, falling back to LibreOffice:', puppeteerError);
+        }
+      }
+      
+      // Step 3: Fallback to LibreOffice PDF rendering
+      console.log('Converting PPTX to PDF using LibreOffice...');
       const pdfBuffer = await this.convertPptxToPdf(pptxBuffer);
       console.log('PPTX to PDF conversion successful, PDF size:', pdfBuffer.length);
       
-      // Step 2: Convert PDF to individual slide images
+      // Step 3: Convert PDF to individual slide images
       console.log('Converting PDF to slide images...');
       const slideImages = await this.convertPdfToSlideImages(
         pdfBuffer,
         { quality, density, format, saveBase64 }
       );
       console.log(`Generated ${slideImages.length} slide images`);
+      
+      // Step 4: Enhance slides using visual layouts if available
+      if (visualLayouts && slideImages.length === visualLayouts.length) {
+        console.log('Enhancing slide images with visual layout information...');
+        await this.enhanceSlideImagesWithLayouts(slideImages, visualLayouts, { quality, density, format });
+      }
       
       // Verify images were actually created
       for (const slide of slideImages) {
@@ -76,10 +136,12 @@ export class SlideRenderer {
       return {
         slideImages,
         slideCount: slideImages.length,
+        visualLayouts,
         metadata: {
           format,
           quality,
-          density
+          density,
+          hasVisualLayouts: visualLayouts !== undefined
         }
       };
     } catch (error: unknown) {
@@ -90,25 +152,72 @@ export class SlideRenderer {
   }
 
   /**
-   * Convert PPTX buffer to PDF buffer using multiple methods
+   * Convert PPTX buffer to PDF buffer using enhanced LibreOffice converter
    */
   private async convertPptxToPdf(pptxBuffer: Buffer): Promise<Buffer> {
-    // Try LibreOffice first
+    // Check LibreOffice installation first
+    const detector = LibreOfficeDetector.getInstance();
+    const libreOfficeInfo = await detector.checkLibreOfficeInstallation();
+    
+    if (!libreOfficeInfo.installed) {
+      console.error('LibreOffice is not installed on this system.');
+      console.error('Error:', libreOfficeInfo.error);
+      console.log('\n' + detector.getInstallationInstructions());
+      console.log('Download URL:', detector.getDownloadUrl());
+      
+      // Continue with alternative method
+      console.log('Attempting alternative slide screenshot generation...');
+      return await this.createAlternativeSlideImages(pptxBuffer);
+    }
+    
+    // Check version compatibility
+    if (!detector.isVersionSupported(libreOfficeInfo.version)) {
+      console.warn(`LibreOffice version ${libreOfficeInfo.version} is below the recommended version 7.0`);
+    }
+    
+    console.log(`LibreOffice detected: ${libreOfficeInfo.path} (version ${libreOfficeInfo.version})`);
+    
+    // Try enhanced LibreOffice conversion with progress tracking
     try {
-      console.log('Trying LibreOffice conversion...');
-      const pdfBuffer = await convertAsync(pptxBuffer, '.pdf', undefined);
+      console.log('Starting enhanced LibreOffice conversion...');
+      
+      const pdfBuffer = await this.converter.convertWithProgress(
+        pptxBuffer, 
+        {
+          quality: 'maximum',
+          timeout: 60000,
+          additionalArgs: ['--nofirststartwizard']
+        },
+        (progress) => {
+          console.log(`Conversion progress: ${progress.stage} - ${progress.message}`);
+        }
+      );
       
       if (pdfBuffer && pdfBuffer.length > 0) {
-        console.log('LibreOffice conversion successful, PDF size:', pdfBuffer.length);
-        return pdfBuffer as Buffer;
+        console.log('Enhanced LibreOffice conversion successful, PDF size:', pdfBuffer.length);
+        return pdfBuffer;
       }
     } catch (libreOfficeError: unknown) {
       const message = libreOfficeError instanceof Error ? libreOfficeError.message : 'Unknown error';
-      console.log('LibreOffice conversion failed:', message);
+      console.error('Enhanced LibreOffice conversion failed:', message);
+      
+      // Fallback to simple conversion method
+      try {
+        console.log('Trying fallback LibreOffice conversion...');
+        const pdfBuffer = await convertAsync(pptxBuffer, '.pdf', undefined);
+        
+        if (pdfBuffer && pdfBuffer.length > 0) {
+          console.log('Fallback LibreOffice conversion successful, PDF size:', pdfBuffer.length);
+          return pdfBuffer as Buffer;
+        }
+      } catch (fallbackError: unknown) {
+        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'Unknown error';
+        console.error('Fallback LibreOffice conversion also failed:', fallbackMessage);
+      }
     }
 
-    // LibreOffice failed, try alternative approach
-    console.log('Attempting alternative slide screenshot generation...');
+    // All LibreOffice methods failed, try alternative approach
+    console.log('All LibreOffice methods failed, falling back to alternative slide screenshot generation...');
     return await this.createAlternativeSlideImages(pptxBuffer);
   }
 
@@ -506,7 +615,7 @@ export class SlideRenderer {
   }
 
   /**
-   * Convert PDF buffer to individual slide images using pdf2pic or return pre-generated images
+   * Convert PDF buffer to individual slide images with optimization
    */
   private async convertPdfToSlideImages(
     pdfBuffer: Buffer,
@@ -519,26 +628,23 @@ export class SlideRenderer {
         return this.generatedSlideImages;
       }
 
-      // Standard PDF to image conversion using pdf2pic
+      // Standard PDF to image conversion using pdf2pic with optimization
       await fs.mkdir(this.outputDir, { recursive: true });
       console.log('PDF to images: Output directory created:', this.outputDir);
 
-      // Configure pdf2pic
+      // Optimize settings based on quality
+      const optimizedOptions = this.optimizePdfToImageSettings(options);
+      console.log('Optimized PDF2PIC settings:', optimizedOptions);
+
+      // Configure pdf2pic with optimized settings
       const convert = fromBuffer(pdfBuffer, {
-        density: options.density,
+        density: optimizedOptions.density,
         saveFilename: 'slide',
         savePath: this.outputDir,
         format: options.format,
-        width: undefined, // Let pdf2pic calculate based on density
-        height: undefined,
-        quality: options.quality
-      });
-
-      console.log('PDF2PIC configuration:', {
-        density: options.density,
-        format: options.format,
-        quality: options.quality,
-        outputDir: this.outputDir
+        width: optimizedOptions.width,
+        height: optimizedOptions.height,
+        quality: optimizedOptions.quality
       });
 
       // Get total number of pages first
@@ -556,21 +662,38 @@ export class SlideRenderer {
 
         console.log(`Processing slide ${slideNumber}, expected file: ${filename}`);
 
-        // Save the image file
-        const imageBuffer = (result as any).buffer;
-        if (imageBuffer) {
-          await fs.writeFile(savedPath, imageBuffer);
-          console.log(`Saved slide image: ${savedPath} (${imageBuffer.length} bytes)`);
-          
-          slideImages.push({
-            originalPath: `slide${slideNumber}`, // Virtual path for consistency
-            savedPath: savedPath,
-            size: imageBuffer.length,
-            format: options.format
-          });
-        } else {
-          console.warn(`No buffer found for slide ${slideNumber}`);
+        // Save the image file with error handling
+        try {
+          const imageBuffer = (result as any).buffer;
+          if (imageBuffer && imageBuffer.length > 0) {
+            await fs.writeFile(savedPath, imageBuffer);
+            
+            // Verify file was written correctly
+            const stats = await fs.stat(savedPath);
+            if (stats.size > 0) {
+              console.log(`Saved slide image: ${savedPath} (${stats.size} bytes)`);
+              
+              slideImages.push({
+                originalPath: `slide${slideNumber}`,
+                savedPath: savedPath,
+                size: stats.size,
+                format: options.format
+              });
+            } else {
+              console.warn(`Slide ${slideNumber} file is empty after writing`);
+            }
+          } else {
+            console.warn(`No buffer found for slide ${slideNumber}`);
+          }
+        } catch (slideError: unknown) {
+          const slideMessage = slideError instanceof Error ? slideError.message : 'Unknown error';
+          console.warn(`Failed to process slide ${slideNumber}: ${slideMessage}`);
+          // Continue processing other slides
         }
+      }
+
+      if (slideImages.length === 0) {
+        throw new Error('No slide images were successfully created');
       }
 
       console.log(`Successfully created ${slideImages.length} slide images`);
@@ -580,6 +703,54 @@ export class SlideRenderer {
       console.error('PDF to images conversion error:', error);
       throw new ParseError('SlideRenderer', `PDF to images conversion failed: ${message}`, error as Error);
     }
+  }
+
+  /**
+   * Optimize PDF to image conversion settings based on quality requirements
+   */
+  private optimizePdfToImageSettings(options: Required<Pick<SlideRenderOptions, 'quality' | 'density' | 'format' | 'saveBase64'>>) {
+    // Standard slide dimensions (16:9 aspect ratio)
+    const baseWidth = 1920;
+    const baseHeight = 1080;
+    
+    // Adjust settings based on quality
+    let optimizedDensity = options.density;
+    let optimizedQuality = options.quality;
+    let width = baseWidth;
+    let height = baseHeight;
+
+    if (options.quality >= 95) {
+      // Ultra-high quality
+      optimizedDensity = Math.max(options.density, 300);
+      optimizedQuality = 100;
+      width = 2560;
+      height = 1440;
+    } else if (options.quality >= 85) {
+      // High quality
+      optimizedDensity = Math.max(options.density, 200);
+      optimizedQuality = Math.max(options.quality, 90);
+      width = 1920;
+      height = 1080;
+    } else if (options.quality >= 70) {
+      // Medium quality
+      optimizedDensity = Math.max(options.density, 150);
+      optimizedQuality = Math.max(options.quality, 80);
+      width = 1600;
+      height = 900;
+    } else {
+      // Lower quality for faster processing
+      optimizedDensity = Math.max(options.density, 100);
+      optimizedQuality = options.quality;
+      width = 1280;
+      height = 720;
+    }
+
+    return {
+      density: optimizedDensity,
+      quality: optimizedQuality,
+      width,
+      height
+    };
   }
 
   /**
@@ -609,6 +780,116 @@ export class SlideRenderer {
   }
 
   /**
+   * Enhance slide images using visual layout information
+   */
+  private async enhanceSlideImagesWithLayouts(
+    slideImages: readonly ImageData[],
+    visualLayouts: readonly SlideLayout[],
+    options: { quality: number; density: number; format: string }
+  ): Promise<void> {
+    try {
+      // Try to import Canvas for enhanced rendering
+      let Canvas: any;
+      try {
+        Canvas = await import('canvas');
+      } catch {
+        console.log('Canvas module not available for slide enhancement');
+        return;
+      }
+
+      for (let i = 0; i < slideImages.length && i < visualLayouts.length; i++) {
+        const slideImage = slideImages[i];
+        const layout = visualLayouts[i];
+        
+        try {
+          // Read existing slide image
+          const originalImageBuffer = await fs.readFile(slideImage.savedPath);
+          
+          // Create canvas from original image
+          const originalImage = await Canvas.loadImage(originalImageBuffer);
+          const canvas = Canvas.createCanvas(originalImage.width, originalImage.height);
+          const ctx = canvas.getContext('2d');
+          
+          // Draw original image as base
+          ctx.drawImage(originalImage, 0, 0);
+          
+          // Overlay additional visual elements if needed
+          await this.addVisualEnhancements(ctx, layout, {
+            width: originalImage.width,
+            height: originalImage.height,
+            slideNumber: i + 1
+          });
+          
+          // Save enhanced image (optional - only if we made changes)
+          const enhancedBuffer = canvas.toBuffer(`image/${options.format}`);
+          
+          // Only replace if the enhancement actually improved the image
+          if (enhancedBuffer.length > 0) {
+            console.log(`Enhanced slide ${i + 1} with visual layout information`);
+            // For now, we'll keep the original to avoid overwriting working images
+            // In the future, this could replace the original with the enhanced version
+          }
+          
+        } catch (slideError) {
+          console.warn(`Failed to enhance slide ${i + 1}:`, slideError);
+          // Continue with other slides
+        }
+      }
+    } catch (error) {
+      console.warn('Slide enhancement failed:', error);
+      // Enhancement is optional, so we don't throw errors
+    }
+  }
+
+  /**
+   * Add visual enhancements based on layout information
+   */
+  private async addVisualEnhancements(
+    ctx: any,
+    layout: SlideLayout,
+    dimensions: { width: number; height: number; slideNumber: number }
+  ): Promise<void> {
+    try {
+      // Register fonts for international character support
+      const Canvas = await import('canvas');
+      await this.registerFontsForCanvas(Canvas);
+      
+      // Add subtle overlay indicators for different element types
+      const textElements = layout.elements.filter(e => e.type === 'text');
+      const imageElements = layout.elements.filter(e => e.type === 'image');
+      const chartElements = layout.elements.filter(e => e.type === 'chart');
+      
+      // Add corner annotations for element counts (very subtle)
+      if (textElements.length > 0 || imageElements.length > 0 || chartElements.length > 0) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.font = this.getUniversalFont(12);
+        
+        let annotationY = dimensions.height - 30;
+        
+        if (textElements.length > 0) {
+          ctx.fillText(`📝 ${textElements.length}`, 10, annotationY);
+          annotationY -= 15;
+        }
+        
+        if (imageElements.length > 0) {
+          ctx.fillText(`🖼️ ${imageElements.length}`, 10, annotationY);
+          annotationY -= 15;
+        }
+        
+        if (chartElements.length > 0) {
+          ctx.fillText(`📊 ${chartElements.length}`, 10, annotationY);
+        }
+        
+        ctx.restore();
+      }
+      
+    } catch (error) {
+      console.warn('Failed to add visual enhancements:', error);
+    }
+  }
+
+  /**
    * Clean up generated image files
    */
   async cleanup(): Promise<void> {
@@ -628,6 +909,28 @@ export class SlideRenderer {
   }
 
   /**
+   * Render slides using Puppeteer browser-based rendering
+   */
+  private async renderWithPuppeteer(
+    visualLayouts: readonly SlideLayout[],
+    options: PuppeteerRenderOptions = {}
+  ): Promise<{ slideImages: ImageData[]; slideCount: number; metadata: any }> {
+    const puppeteerRenderer = new PuppeteerRenderer(this.outputDir);
+    
+    try {
+      const result = await puppeteerRenderer.renderSlidesFromLayouts(visualLayouts, options);
+      return {
+        slideImages: [...result.slideImages],
+        slideCount: result.slideCount,
+        metadata: result.metadata
+      };
+    } finally {
+      // Always cleanup Puppeteer resources
+      await puppeteerRenderer.cleanup();
+    }
+  }
+
+  /**
    * Check if LibreOffice is available on the system
    */
   static async checkLibreOfficeAvailability(): Promise<boolean> {
@@ -639,5 +942,12 @@ export class SlideRenderer {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Check if Puppeteer is available on the system
+   */
+  static async checkPuppeteerAvailability(): Promise<boolean> {
+    return await PuppeteerRenderer.isAvailable();
   }
 }

@@ -6,6 +6,7 @@ import type { Buffer } from 'node:buffer';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
 import { SlideRenderer, type SlideRenderOptions } from '../utils/slide-renderer.js';
+import { PptxVisualParser, type SlideLayout } from '../utils/pptx-visual-parser.js';
 import { ParseError } from '../types/errors.js';
 import type { 
   ImageData, 
@@ -17,6 +18,7 @@ export interface PptxParseOptions {
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
   readonly useSlideScreenshots?: boolean; // New option for slide-based rendering
+  readonly useVisualParser?: boolean; // Enhanced visual parsing for better layout understanding
   readonly slideRenderOptions?: SlideRenderOptions;
   readonly outputDir?: string;
 }
@@ -27,6 +29,7 @@ export interface PptxParseResult {
   readonly charts: readonly ChartData[];
   readonly slideCount: number;
   readonly metadata: Record<string, unknown>;
+  readonly visualLayouts?: readonly SlideLayout[]; // Enhanced visual information
 }
 
 interface SlideFile {
@@ -80,6 +83,18 @@ async function parsePptxWithSlideScreenshots(
   const slideRenderer = new SlideRenderer(outputDir);
   
   try {
+    // Enhanced visual parsing if requested
+    let visualLayouts: SlideLayout[] | undefined;
+    if (options.useVisualParser !== false) {
+      try {
+        const visualParser = new PptxVisualParser();
+        visualLayouts = await visualParser.parseVisualElements(buffer);
+        console.log(`Visual parser extracted ${visualLayouts.length} slide layouts`);
+      } catch (visualError) {
+        console.warn('Visual parsing failed, continuing with standard processing:', visualError);
+      }
+    }
+    
     // Convert PPTX to slide images
     const renderResult = await slideRenderer.renderSlidesToImages(
       buffer,
@@ -89,11 +104,10 @@ async function parsePptxWithSlideScreenshots(
     // Extract title from PPTX metadata for better markdown generation
     const title = await extractPptxTitle(buffer);
     
-    // Generate markdown with slide images
-    const markdown = slideRenderer.generateSlideMarkdown(
-      renderResult.slideImages,
-      title
-    );
+    // Generate enhanced markdown with visual layouts if available
+    const markdown = visualLayouts 
+      ? generateEnhancedMarkdownWithLayouts(renderResult.slideImages, visualLayouts, title)
+      : slideRenderer.generateSlideMarkdown(renderResult.slideImages, title);
     
     // Still extract charts if requested (need to load zip for chart extraction)
     let extractedCharts: readonly any[] = [];
@@ -111,11 +125,13 @@ async function parsePptxWithSlideScreenshots(
       images: renderResult.slideImages,
       charts: extractedCharts.map(chart => chart.data),
       slideCount: renderResult.slideCount,
+      visualLayouts,
       metadata: {
         totalSlides: renderResult.slideCount,
         hasImages: renderResult.slideImages.length > 0,
         hasCharts: extractedCharts.length > 0,
         renderMethod: 'slide-screenshots',
+        hasVisualLayouts: visualLayouts !== undefined,
         ...renderResult.metadata
       }
     };
@@ -297,4 +313,82 @@ async function extractLegacySlideContent(
     const message = error instanceof Error ? error.message : 'Unknown error';
     throw new ParseError('PPTX', `Failed to extract legacy content from slide: ${message}`, error as Error);
   }
+}
+
+/**
+ * Generate enhanced markdown with visual layout information
+ */
+function generateEnhancedMarkdownWithLayouts(
+  slideImages: readonly ImageData[],
+  visualLayouts: readonly SlideLayout[],
+  title?: string
+): string {
+  let markdown = '';
+  
+  if (title) {
+    markdown += `# ${title}\n\n`;
+  }
+
+  for (let i = 0; i < slideImages.length; i++) {
+    const slide = slideImages[i];
+    const layout = visualLayouts[i];
+    const slideNumber = i + 1;
+    
+    // Generate slide header with enhanced information
+    if (layout?.title) {
+      markdown += `## Slide ${slideNumber}: ${layout.title}\n\n`;
+    } else {
+      markdown += `## Slide ${slideNumber}\n\n`;
+    }
+    
+    // Use relative path for markdown image reference
+    const relativePath = path.relative(process.cwd(), slide.savedPath)
+      .replace(/\\/g, '/'); // Ensure forward slashes for markdown
+    
+    markdown += `![Slide ${slideNumber}](${relativePath})\n\n`;
+    
+    // Add layout information if available
+    if (layout && layout.elements.length > 0) {
+      markdown += `### Slide Content Summary\n\n`;
+      
+      // Categorize elements
+      const textElements = layout.elements.filter(e => e.type === 'text');
+      const imageElements = layout.elements.filter(e => e.type === 'image');
+      const chartElements = layout.elements.filter(e => e.type === 'chart');
+      const tableElements = layout.elements.filter(e => e.type === 'table');
+      const shapeElements = layout.elements.filter(e => e.type === 'shape');
+      
+      // Add text content
+      if (textElements.length > 0) {
+        markdown += `**Text Elements (${textElements.length}):**\n`;
+        textElements.forEach((element, index) => {
+          if (element.type === 'text' && element.content?.text) {
+            const textContent = element.content.text.trim();
+            if (textContent) {
+              markdown += `${index + 1}. ${textContent.substring(0, 100)}${textContent.length > 100 ? '...' : ''}\n`;
+            }
+          }
+        });
+        markdown += '\n';
+      }
+      
+      // Add visual element counts
+      if (imageElements.length > 0) {
+        markdown += `**Images:** ${imageElements.length} embedded image(s)\n`;
+      }
+      if (chartElements.length > 0) {
+        markdown += `**Charts:** ${chartElements.length} chart(s)\n`;
+      }
+      if (tableElements.length > 0) {
+        markdown += `**Tables:** ${tableElements.length} table(s)\n`;
+      }
+      if (shapeElements.length > 0) {
+        markdown += `**Shapes:** ${shapeElements.length} shape(s)\n`;
+      }
+      
+      markdown += '\n';
+    }
+  }
+
+  return markdown.trim();
 }
