@@ -5,7 +5,6 @@ import type { Buffer } from 'node:buffer';
 
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
-import { SlideRenderer, type SlideRenderOptions } from '../utils/slide-renderer.js';
 import { PptxVisualParser, type SlideLayout } from '../utils/pptx-visual-parser.js';
 import { ParseError } from '../types/errors.js';
 import type { 
@@ -17,10 +16,7 @@ export interface PptxParseOptions {
   readonly preserveLayout?: boolean;
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
-  readonly useSlideScreenshots?: boolean; // New option for slide-based rendering
   readonly useVisualParser?: boolean; // Enhanced visual parsing for better layout understanding
-  readonly slideRenderOptions?: SlideRenderOptions;
-  readonly outputDir?: string;
 }
 
 export interface PptxParseResult {
@@ -47,18 +43,7 @@ export async function parsePptx(
   options: PptxParseOptions = {}
 ): Promise<PptxParseResult> {
   try {
-    // Check if slide screenshots are requested (new default behavior)
-    if (options.useSlideScreenshots !== false) {
-      return await parsePptxWithSlideScreenshots(
-        buffer,
-        imageExtractor,
-        chartExtractor,
-        options
-      );
-    }
-
-    // Fallback to legacy layout parsing if slide screenshots are disabled
-    return await parsePptxLegacyMode(
+    return await parsePptxToMarkdown(
       buffer,
       imageExtractor,
       chartExtractor,
@@ -71,81 +56,9 @@ export async function parsePptx(
 }
 
 /**
- * New slide screenshot-based parsing (recommended)
+ * Parse PPTX to markdown without image generation
  */
-async function parsePptxWithSlideScreenshots(
-  buffer: Buffer,
-  imageExtractor: ImageExtractor,
-  chartExtractor: ChartExtractor,
-  options: PptxParseOptions
-): Promise<PptxParseResult> {
-  const outputDir = options.outputDir || './images';
-  const slideRenderer = new SlideRenderer(outputDir);
-  
-  try {
-    // Enhanced visual parsing if requested
-    let visualLayouts: SlideLayout[] | undefined;
-    if (options.useVisualParser !== false) {
-      try {
-        const visualParser = new PptxVisualParser();
-        visualLayouts = await visualParser.parseVisualElements(buffer);
-        console.log(`Visual parser extracted ${visualLayouts.length} slide layouts`);
-      } catch (visualError) {
-        console.warn('Visual parsing failed, continuing with standard processing:', visualError);
-      }
-    }
-    
-    // Convert PPTX to slide images
-    const renderResult = await slideRenderer.renderSlidesToImages(
-      buffer,
-      options.slideRenderOptions
-    );
-    
-    // Extract title from PPTX metadata for better markdown generation
-    const title = await extractPptxTitle(buffer);
-    
-    // Generate enhanced markdown with visual layouts if available
-    const markdown = visualLayouts 
-      ? generateEnhancedMarkdownWithLayouts(renderResult.slideImages, visualLayouts, title)
-      : slideRenderer.generateSlideMarkdown(renderResult.slideImages, title);
-    
-    // Still extract charts if requested (need to load zip for chart extraction)
-    let extractedCharts: readonly any[] = [];
-    if (options.extractCharts !== false) {
-      try {
-        const zip = await JSZip.loadAsync(buffer);
-        extractedCharts = await chartExtractor.extractChartsFromZip(zip, 'ppt/');
-      } catch {
-        // Ignore chart extraction errors
-      }
-    }
-    
-    return {
-      markdown,
-      images: renderResult.slideImages,
-      charts: extractedCharts.map(chart => chart.data),
-      slideCount: renderResult.slideCount,
-      visualLayouts,
-      metadata: {
-        totalSlides: renderResult.slideCount,
-        hasImages: renderResult.slideImages.length > 0,
-        hasCharts: extractedCharts.length > 0,
-        renderMethod: 'slide-screenshots',
-        hasVisualLayouts: visualLayouts !== undefined,
-        ...renderResult.metadata
-      }
-    };
-  } catch (error: unknown) {
-    // If slide rendering fails, fall back to legacy mode
-    console.warn('Slide screenshot rendering failed, falling back to legacy mode:', error);
-    return await parsePptxLegacyMode(buffer, imageExtractor, chartExtractor, options);
-  }
-}
-
-/**
- * Legacy layout parsing mode (fallback)
- */
-async function parsePptxLegacyMode(
+async function parsePptxToMarkdown(
   buffer: Buffer,
   imageExtractor: ImageExtractor,
   chartExtractor: ChartExtractor,
@@ -153,7 +66,19 @@ async function parsePptxLegacyMode(
 ): Promise<PptxParseResult> {
   const zip = await JSZip.loadAsync(buffer);
   
-  // Extract images first
+  // Enhanced visual parsing if requested (for text extraction)
+  let visualLayouts: SlideLayout[] | undefined;
+  if (options.useVisualParser !== false) {
+    try {
+      const visualParser = new PptxVisualParser();
+      visualLayouts = await visualParser.parseVisualElements(buffer);
+      console.log(`Visual parser extracted ${visualLayouts.length} slide layouts`);
+    } catch (visualError) {
+      console.warn('Visual parsing failed, continuing with standard processing:', visualError);
+    }
+  }
+  
+  // Extract embedded images metadata only (not for slide screenshots)
   const extractedImages = options.extractImages !== false 
     ? await imageExtractor.extractImagesFromZip(zip, 'ppt/')
     : [];
@@ -179,26 +104,85 @@ async function parsePptxLegacyMode(
     return aNum - bNum;
   });
   
+  // Extract title from PPTX metadata
+  const title = await extractPptxTitle(buffer);
+  
   let markdown = '';
   
-  for (let i = 0; i < slideFiles.length; i++) {
-    const slideFile = slideFiles[i];
-    const slideNumber = i + 1;
-    
-    markdown += `## Slide ${slideNumber}\n\n`;
-    
-    const xmlContent = await slideFile.file.async('string');
-    const slideContent = await extractLegacySlideContent(
-      xmlContent, 
-      imageExtractor, 
-      extractedImages, 
-      slideNumber
-    );
-    
-    if (slideContent.trim()) {
-      markdown += slideContent + '\n\n';
-    } else {
-      markdown += '*No content*\n\n';
+  if (title) {
+    markdown += `# ${title}\n\n`;
+  }
+  
+  // Use visual layouts for enhanced text extraction if available
+  if (visualLayouts && visualLayouts.length === slideFiles.length) {
+    for (let i = 0; i < slideFiles.length; i++) {
+      const slideFile = slideFiles[i];
+      const slideNumber = i + 1;
+      const layout = visualLayouts[i];
+      
+      if (layout?.title) {
+        markdown += `## Slide ${slideNumber}: ${layout.title}\n\n`;
+      } else {
+        markdown += `## Slide ${slideNumber}\n\n`;
+      }
+      
+      // Extract text from visual layout
+      const textElements = layout.elements.filter(e => e.type === 'text');
+      if (textElements.length > 0) {
+        textElements.forEach((element) => {
+          if (element.type === 'text' && element.content?.text) {
+            const textContent = element.content.text.trim();
+            if (textContent) {
+              markdown += `${textContent}\n\n`;
+            }
+          }
+        });
+      } else {
+        // Fallback to XML extraction if no text in visual layout
+        const xmlContent = await slideFile.file.async('string');
+        const slideContent = await extractSlideTextContent(xmlContent);
+        if (slideContent.trim()) {
+          markdown += slideContent + '\n\n';
+        } else {
+          markdown += '*No content*\n\n';
+        }
+      }
+      
+      // Add metadata about other elements
+      const imageElements = layout.elements.filter(e => e.type === 'image');
+      const chartElements = layout.elements.filter(e => e.type === 'chart');
+      const tableElements = layout.elements.filter(e => e.type === 'table');
+      
+      if (imageElements.length > 0 || chartElements.length > 0 || tableElements.length > 0) {
+        markdown += '### Slide Elements\n\n';
+        if (imageElements.length > 0) {
+          markdown += `- ${imageElements.length} image(s)\n`;
+        }
+        if (chartElements.length > 0) {
+          markdown += `- ${chartElements.length} chart(s)\n`;
+        }
+        if (tableElements.length > 0) {
+          markdown += `- ${tableElements.length} table(s)\n`;
+        }
+        markdown += '\n';
+      }
+    }
+  } else {
+    // Standard text extraction without visual layouts
+    for (let i = 0; i < slideFiles.length; i++) {
+      const slideFile = slideFiles[i];
+      const slideNumber = i + 1;
+      
+      markdown += `## Slide ${slideNumber}\n\n`;
+      
+      const xmlContent = await slideFile.file.async('string');
+      const slideContent = await extractSlideTextContent(xmlContent);
+      
+      if (slideContent.trim()) {
+        markdown += slideContent + '\n\n';
+      } else {
+        markdown += '*No content*\n\n';
+      }
     }
   }
   
@@ -211,7 +195,8 @@ async function parsePptxLegacyMode(
       totalSlides: slideFiles.length,
       hasImages: extractedImages.length > 0,
       hasCharts: extractedCharts.length > 0,
-      renderMethod: 'legacy-layout-parsing'
+      renderMethod: 'text-extraction',
+      hasVisualLayouts: visualLayouts !== undefined
     }
   };
 }
@@ -242,13 +227,10 @@ async function extractPptxTitle(buffer: Buffer): Promise<string | undefined> {
 }
 
 /**
- * Legacy slide content extraction (simplified version)
+ * Extract text content from slide XML
  */
-async function extractLegacySlideContent(
-  xmlContent: string,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[],
-  slideNumber: number
+async function extractSlideTextContent(
+  xmlContent: string
 ): Promise<string> {
   try {
     const result = await parseStringPromise(xmlContent) as any;
@@ -291,104 +273,9 @@ async function extractLegacySlideContent(
     
     // Extract all text content
     const textContent = extractText(result).trim();
-    if (textContent) {
-      markdown += textContent + '\n\n';
-    }
-    
-    // Add any images for this slide
-    const slideImages = extractedImages.filter(img => 
-      img.originalPath.includes(`slide${slideNumber}`) ||
-      (slideNumber === 1 && img.originalPath.includes('media/'))
-    );
-    
-    for (const img of slideImages) {
-      if (img.savedPath) {
-        const filename = path.basename(img.savedPath);
-        markdown += imageExtractor.getImageMarkdown(`Slide ${slideNumber} Image`, filename) + '\n\n';
-      }
-    }
-    
-    return markdown.trim();
+    return textContent;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('PPTX', `Failed to extract legacy content from slide: ${message}`, error as Error);
+    throw new ParseError('PPTX', `Failed to extract text content from slide: ${message}`, error as Error);
   }
-}
-
-/**
- * Generate enhanced markdown with visual layout information
- */
-function generateEnhancedMarkdownWithLayouts(
-  slideImages: readonly ImageData[],
-  visualLayouts: readonly SlideLayout[],
-  title?: string
-): string {
-  let markdown = '';
-  
-  if (title) {
-    markdown += `# ${title}\n\n`;
-  }
-
-  for (let i = 0; i < slideImages.length; i++) {
-    const slide = slideImages[i];
-    const layout = visualLayouts[i];
-    const slideNumber = i + 1;
-    
-    // Generate slide header with enhanced information
-    if (layout?.title) {
-      markdown += `## Slide ${slideNumber}: ${layout.title}\n\n`;
-    } else {
-      markdown += `## Slide ${slideNumber}\n\n`;
-    }
-    
-    // Use relative path for markdown image reference
-    const relativePath = path.relative(process.cwd(), slide.savedPath)
-      .replace(/\\/g, '/'); // Ensure forward slashes for markdown
-    
-    markdown += `![Slide ${slideNumber}](${relativePath})\n\n`;
-    
-    // Add layout information if available
-    if (layout && layout.elements.length > 0) {
-      markdown += `### Slide Content Summary\n\n`;
-      
-      // Categorize elements
-      const textElements = layout.elements.filter(e => e.type === 'text');
-      const imageElements = layout.elements.filter(e => e.type === 'image');
-      const chartElements = layout.elements.filter(e => e.type === 'chart');
-      const tableElements = layout.elements.filter(e => e.type === 'table');
-      const shapeElements = layout.elements.filter(e => e.type === 'shape');
-      
-      // Add text content
-      if (textElements.length > 0) {
-        markdown += `**Text Elements (${textElements.length}):**\n`;
-        textElements.forEach((element, index) => {
-          if (element.type === 'text' && element.content?.text) {
-            const textContent = element.content.text.trim();
-            if (textContent) {
-              markdown += `${index + 1}. ${textContent.substring(0, 100)}${textContent.length > 100 ? '...' : ''}\n`;
-            }
-          }
-        });
-        markdown += '\n';
-      }
-      
-      // Add visual element counts
-      if (imageElements.length > 0) {
-        markdown += `**Images:** ${imageElements.length} embedded image(s)\n`;
-      }
-      if (chartElements.length > 0) {
-        markdown += `**Charts:** ${chartElements.length} chart(s)\n`;
-      }
-      if (tableElements.length > 0) {
-        markdown += `**Tables:** ${tableElements.length} table(s)\n`;
-      }
-      if (shapeElements.length > 0) {
-        markdown += `**Shapes:** ${shapeElements.length} shape(s)\n`;
-      }
-      
-      markdown += '\n';
-    }
-  }
-
-  return markdown.trim();
 }

@@ -32,16 +32,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "canvas": "^2.11.2",
     "file-type": "^16.5.4",
     "jszip": "^3.10.1",
-    "libreoffice-convert": "^1.6.1",
     "pdf-parse": "^1.1.1",
-    "pdf2pic": "^2.1.4",
     "xml2js": "^0.6.2"
-  },
-  "optionalDependencies": {
-    "@canvas/noto-fonts": "^1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -51,7 +45,6 @@
     "@types/jszip": "^3.4.1",
     "@types/node": "^20.0.0",
     "@types/pdf-parse": "^1.1.5",
-    "@types/puppeteer": "^7.0.4",
     "@types/xml2js": "^0.4.14",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",

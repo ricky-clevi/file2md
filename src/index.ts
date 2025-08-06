@@ -137,9 +137,7 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         const result = await parsePptx(buffer, imageExtractor, chartExtractor, { 
           preserveLayout, 
           extractImages, 
-          extractCharts, 
-          outputDir: outputDir || imageDir, // Use outputDir if specified, fallback to imageDir
-          useSlideScreenshots: true // Enable slide screenshots by default
+          extractCharts
         });
         markdown = result.markdown;
         images = result.images || [];
