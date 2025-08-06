@@ -88,14 +88,28 @@ export async function POST(request: NextRequest) {
     try {
       // Use the imported convert function
       
-      // Convert file using file2md
+      // Convert file using file2md with enhanced options
       const imageDir = path.join(tempDir, `${fileId}-images`);
+      console.log('Image directory configured:', imageDir);
+      
       const result = await convert(tempFilePath, {
-        imageDir,
+        imageDir: imageDir,    // For legacy mode (DOCX, etc.)
+        outputDir: imageDir,   // For slide screenshots (PPTX)
         preserveLayout: true,
         extractImages: true,
         extractCharts: true,
       });
+      
+      console.log('Conversion result - images found:', result.images.length);
+      if (result.images.length > 0) {
+        console.log('First few image paths:');
+        result.images.slice(0, 3).forEach((img, i) => {
+          console.log(`  ${i + 1}: ${img.savedPath}`);
+        });
+        if (result.images.length > 3) {
+          console.log(`  ... and ${result.images.length - 3} more images`);
+        }
+      }
 
       const hasImages = result.images.length > 0;
       let downloadUrl: string;
@@ -187,6 +201,8 @@ async function createZipFile(
     archive.append(markdown, { name: `${originalName}.md` });
 
     // Add image files with path normalization and containment check
+    console.log(`ZIP creation: Processing ${images.length} images`);
+    
     for (const image of images) {
       try {
         const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
@@ -195,16 +211,16 @@ async function createZipFile(
 
         // ensure image path is within imageDir
         if (!absImagePath.startsWith(absImageDir + path.sep) && absImagePath !== absImageDir) {
-          console.warn(`Skipping image outside expected directory: ${absImagePath}`);
+          console.warn(`Skipping image outside expected directory: ${path.basename(absImagePath)}`);
           continue;
         }
 
         const imageName = path.basename(absImagePath);
         if (existsSync(absImagePath)) {
-          console.log(`Adding image to ZIP: ${imageName} from ${absImagePath}`);
+          console.log(`Adding image to ZIP: ${imageName}`);
           archive.file(absImagePath, { name: `images/${imageName}` });
         } else {
-          console.warn(`Image file not found: ${absImagePath}`);
+          console.warn(`Image file not found: ${imageName}`);
         }
       } catch (e) {
         console.warn(`Error processing image for ZIP:`, e);

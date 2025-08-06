@@ -6,6 +6,8 @@ import type { Buffer } from 'node:buffer';
 export interface ConvertOptions {
   /** Directory to save extracted images. Defaults to 'images' */
   readonly imageDir?: string;
+  /** Output directory for slide screenshots (PPTX). Falls back to imageDir if not specified. */
+  readonly outputDir?: string;
   /** Whether to preserve document layout as much as possible. Defaults to true */
   readonly preserveLayout?: boolean;
   /** Whether to extract charts and convert them to markdown tables. Defaults to true */

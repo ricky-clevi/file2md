@@ -88,6 +88,7 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
     // Setup extractors
     const {
       imageDir = 'images',
+      outputDir,
       preserveLayout = true,
       extractCharts = true,
       extractImages = true,
@@ -133,7 +134,13 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
       }
       
       case SUPPORTED_MIME_TYPES.PPTX: {
-        const result = await parsePptx(buffer, imageExtractor, chartExtractor, { preserveLayout, extractImages, extractCharts });
+        const result = await parsePptx(buffer, imageExtractor, chartExtractor, { 
+          preserveLayout, 
+          extractImages, 
+          extractCharts, 
+          outputDir: outputDir || imageDir, // Use outputDir if specified, fallback to imageDir
+          useSlideScreenshots: true // Enable slide screenshots by default
+        });
         markdown = result.markdown;
         images = result.images || [];
         charts = result.charts || [];
