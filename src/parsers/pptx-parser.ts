@@ -1,6 +1,5 @@
 import JSZip from 'jszip';
 import { parseStringPromise } from 'xml2js';
-import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
 import type { ImageExtractor } from '../utils/image-extractor.js';
@@ -71,7 +70,8 @@ async function parsePptxToMarkdown(
   if (options.useVisualParser !== false) {
     try {
       const visualParser = new PptxVisualParser();
-      visualLayouts = await visualParser.parseVisualElements(buffer);
+      const readonlyLayouts = await visualParser.parseVisualElements(buffer);
+      visualLayouts = [...readonlyLayouts];
       console.log(`Visual parser extracted ${visualLayouts.length} slide layouts`);
     } catch (visualError) {
       console.warn('Visual parsing failed, continuing with standard processing:', visualError);
@@ -93,14 +93,14 @@ async function parsePptxToMarkdown(
     if (relativePath.startsWith('ppt/slides/slide') && relativePath.endsWith('.xml')) {
       slideFiles.push({
         path: relativePath,
-        file: file
+        file
       });
     }
   });
   
   slideFiles.sort((a, b) => {
-    const aNum = parseInt(a.path.match(/slide(\d+)\.xml/)?.[1] || '0');
-    const bNum = parseInt(b.path.match(/slide(\d+)\.xml/)?.[1] || '0');
+    const aNum = parseInt(a.path.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
+    const bNum = parseInt(b.path.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
     return aNum - bNum;
   });
   
@@ -130,8 +130,8 @@ async function parsePptxToMarkdown(
       const textElements = layout.elements.filter(e => e.type === 'text');
       if (textElements.length > 0) {
         textElements.forEach((element) => {
-          if (element.type === 'text' && element.content?.text) {
-            const textContent = element.content.text.trim();
+          if (element.type === 'text' && (element.content as { text: string })?.text) {
+            const textContent = (element.content as { text: string }).text.trim();
             if (textContent) {
               markdown += `${textContent}\n\n`;
             }
@@ -142,7 +142,7 @@ async function parsePptxToMarkdown(
         const xmlContent = await slideFile.file.async('string');
         const slideContent = await extractSlideTextContent(xmlContent);
         if (slideContent.trim()) {
-          markdown += slideContent + '\n\n';
+          markdown += `${slideContent}\n\n`;
         } else {
           markdown += '*No content*\n\n';
         }
@@ -179,7 +179,7 @@ async function parsePptxToMarkdown(
       const slideContent = await extractSlideTextContent(xmlContent);
       
       if (slideContent.trim()) {
-        markdown += slideContent + '\n\n';
+        markdown += `${slideContent}\n\n`;
       } else {
         markdown += '*No content*\n\n';
       }
@@ -211,7 +211,7 @@ async function extractPptxTitle(buffer: Buffer): Promise<string | undefined> {
     
     if (corePropsFile) {
       const corePropsContent = await corePropsFile.async('string');
-      const result = await parseStringPromise(corePropsContent) as any;
+      const result = await parseStringPromise(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
       
       // Try to extract title from core properties
       const title = result?.['cp:coreProperties']?.[0]?.['dc:title']?.[0];
@@ -233,11 +233,10 @@ async function extractSlideTextContent(
   xmlContent: string
 ): Promise<string> {
   try {
-    const result = await parseStringPromise(xmlContent) as any;
-    let markdown = '';
+    const result = await parseStringPromise(xmlContent);
     
     // Simple text extraction function
-    function extractText(obj: any): string {
+    function extractText(obj: unknown): string {
       let text = '';
       
       if (typeof obj === 'object' && obj !== null) {
@@ -247,22 +246,22 @@ async function extractSlideTextContent(
           }
         } else {
           // Extract text content
-          if (obj['a:t']) {
-            if (Array.isArray(obj['a:t'])) {
-              for (const textItem of obj['a:t']) {
+          if ((obj as { 'a:t'?: (string | { _: string })[] })['a:t']) {
+            if (Array.isArray((obj as { 'a:t': (string | { _: string })[] })['a:t'])) {
+              for (const textItem of (obj as { 'a:t': (string | { _: string })[] })['a:t']) {
                 if (typeof textItem === 'string') {
-                  text += textItem + ' ';
+                  text += `${textItem} `; 
                 } else if (textItem && typeof textItem === 'object' && '_' in textItem) {
-                  text += (textItem as any)._ + ' ';
+                  text += `${(textItem as { _: string })._} `; 
                 }
               }
             }
           }
           
           // Recursively process nested objects
-          for (const key in obj) {
+          for (const key in (obj as Record<string, unknown>)) {
             if (key !== 'a:t') {
-              text += extractText(obj[key]);
+              text += extractText((obj as Record<string, unknown>)[key]);
             }
           }
         }

@@ -8,7 +8,7 @@ export interface SlideLayout {
   slideNumber: number;
   title?: string;
   background?: BackgroundInfo;
-  elements: VisualElement[];
+  elements: readonly VisualElement[];
   dimensions: SlideDimensions;
 }
 
@@ -21,7 +21,7 @@ export interface SlideDimensions {
 export interface BackgroundInfo {
   type: 'solid' | 'gradient' | 'image' | 'pattern';
   color?: string;
-  colors?: string[]; // For gradients
+  colors?: readonly string[]; // For gradients
   imagePath?: string;
 }
 
@@ -30,9 +30,9 @@ export interface VisualElement {
   type: 'text' | 'shape' | 'image' | 'chart' | 'table' | 'group';
   position: ElementPosition;
   size: ElementSize;
-  content?: any;
+  content?: unknown;
   style?: ElementStyle;
-  children?: VisualElement[]; // For groups
+  children?: readonly VisualElement[]; // For groups
 }
 
 export interface ElementPosition {
@@ -68,13 +68,13 @@ export interface TextElement extends VisualElement {
   type: 'text';
   content: {
     text: string;
-    paragraphs: TextParagraph[];
+    paragraphs: readonly TextParagraph[];
   };
 }
 
 export interface TextParagraph {
   text: string;
-  runs: TextRun[];
+  runs: readonly TextRun[];
   alignment: 'left' | 'center' | 'right' | 'justify';
   level: number;
 }
@@ -88,7 +88,7 @@ export interface ShapeElement extends VisualElement {
   type: 'shape';
   content: {
     shapeType: string;
-    geometry?: any;
+    geometry?: unknown;
   };
 }
 
@@ -105,22 +105,22 @@ export interface ChartElement extends VisualElement {
   type: 'chart';
   content: {
     chartType: string;
-    data?: any;
-    series?: any[];
+    data?: unknown;
+    series?: readonly unknown[];
   };
 }
 
 export interface TableElement extends VisualElement {
   type: 'table';
   content: {
-    rows: TableRow[];
-    columnWidths: number[];
+    rows: readonly TableRow[];
+    columnWidths: readonly number[];
     style?: TableStyle;
   };
 }
 
 export interface TableRow {
-  cells: TableCell[];
+  cells: readonly TableCell[];
   height?: number;
 }
 
@@ -141,13 +141,13 @@ export interface TableStyle {
 export class PptxVisualParser {
   private zip: JSZip | null = null;
   private slideCount = 0;
-  private relationships: Map<string, any> = new Map();
-  private themes: Map<string, any> = new Map();
+  private relationships = new Map<string, unknown>();
+  private themes = new Map<string, unknown>();
 
   /**
    * Parse PPTX buffer to extract comprehensive visual information
    */
-  async parseVisualElements(pptxBuffer: Buffer): Promise<SlideLayout[]> {
+  async parseVisualElements(pptxBuffer: Buffer): Promise<readonly SlideLayout[]> {
     try {
       // Load PPTX as ZIP
       this.zip = await JSZip.loadAsync(pptxBuffer);
@@ -169,8 +169,7 @@ export class PptxVisualParser {
       // Parse each slide
       const slides: SlideLayout[] = [];
       
-      for (let i = 0; i < slideIds.length; i++) {
-        const slideId = slideIds[i];
+      for (const [i, slideId] of slideIds.entries()) {
         try {
           const slide = await this.parseSlide(slideId.id, slideId.rId, i + 1);
           slides.push(slide);
@@ -192,11 +191,11 @@ export class PptxVisualParser {
   /**
    * Extract slide references from presentation.xml
    */
-  private extractSlideReferences(presentation: any): Array<{id: string, rId: string}> {
-    const slideIds: Array<{id: string, rId: string}> = [];
+  private extractSlideReferences(presentation: unknown): readonly {id: string, rId: string}[] {
+    const slideIds: {id: string, rId: string}[] = [];
     
     try {
-      const slideIdList = presentation?.['p:presentation']?.['p:sldIdLst']?.[0]?.['p:sldId'];
+      const slideIdList = (presentation as { 'p:presentation'?: { 'p:sldIdLst'?: readonly { 'p:sldId'?: readonly { $: { id: string, 'r:id': string } }[] }[] } })?.['p:presentation']?.['p:sldIdLst']?.[0]?.['p:sldId'];
       
       if (slideIdList && Array.isArray(slideIdList)) {
         for (const slide of slideIdList) {
@@ -274,7 +273,7 @@ export class PptxVisualParser {
   /**
    * Parse individual slide
    */
-  private async parseSlide(slideId: string, rId: string, slideNumber: number): Promise<SlideLayout> {
+  private async parseSlide(_slideId: string, rId: string, slideNumber: number): Promise<SlideLayout> {
     // Get slide path from relationships
     const slideRel = this.findRelationshipTarget('presentation', rId);
     const slidePath = slideRel ? `ppt/${slideRel.target}` : `ppt/slides/slide${slideNumber}.xml`;
@@ -284,7 +283,7 @@ export class PptxVisualParser {
     const slideDoc = await parseStringPromise(slideXml);
     
     // Extract slide dimensions
-    const dimensions = this.extractSlideDimensions(slideDoc);
+    const dimensions = this.extractSlideDimensions();
     
     // Extract background
     const background = this.extractSlideBackground(slideDoc);
@@ -296,7 +295,7 @@ export class PptxVisualParser {
     const elements = await this.parseSlideElements(slideDoc, slideNumber);
     
     return {
-      slideId,
+      slideId: _slideId,
       slideNumber,
       title,
       background,
@@ -308,7 +307,7 @@ export class PptxVisualParser {
   /**
    * Extract slide dimensions
    */
-  private extractSlideDimensions(slideDoc: any): SlideDimensions {
+  private extractSlideDimensions(): SlideDimensions {
     try {
       // Default PowerPoint slide dimensions in EMUs (English Metric Units)
       // Standard 16:9 slide: 12192000 x 6858000 EMUs
@@ -335,9 +334,9 @@ export class PptxVisualParser {
   /**
    * Extract slide background information
    */
-  private extractSlideBackground(slideDoc: any): BackgroundInfo | undefined {
+  private extractSlideBackground(slideDoc: unknown): BackgroundInfo | undefined {
     try {
-      const bg = slideDoc?.['p:sld']?.['p:cSld']?.[0]?.['p:bg'];
+      const bg = (slideDoc as { 'p:sld'?: { 'p:cSld'?: readonly { 'p:bg'?: unknown }[] } })?.['p:sld']?.['p:cSld']?.[0]?.['p:bg'];
       if (bg) {
         // This is a simplified implementation
         // Real implementation would parse various background types
@@ -355,18 +354,18 @@ export class PptxVisualParser {
   /**
    * Extract slide title
    */
-  private extractSlideTitle(slideDoc: any): string | undefined {
+  private extractSlideTitle(slideDoc: unknown): string | undefined {
     try {
-      const shapes = slideDoc?.['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0]?.['p:sp'];
+      const shapes = (slideDoc as { 'p:sld'?: { 'p:cSld'?: readonly { 'p:spTree'?: readonly { 'p:sp'?: readonly unknown[] }[] }[] } })?.['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0]?.['p:sp'];
       
       if (shapes && Array.isArray(shapes)) {
         for (const shape of shapes) {
-          const nvSpPr = shape?.['p:nvSpPr']?.[0];
-          const ph = nvSpPr?.['p:nvPr']?.[0]?.['p:ph']?.[0];
+          const nvSpPr = (shape as { 'p:nvSpPr'?: readonly unknown[] })?.['p:nvSpPr']?.[0];
+          const ph = (nvSpPr as { 'p:nvPr'?: readonly { 'p:ph'?: readonly { $: { type: string } }[] }[] })?.['p:nvPr']?.[0]?.['p:ph']?.[0];
           
           if (ph?.$ && ph.$.type === 'title') {
             // Extract text from title shape
-            const textBody = shape?.['p:txBody']?.[0];
+            const textBody = (shape as { 'p:txBody'?: readonly unknown[] })?.['p:txBody']?.[0];
             if (textBody) {
               const text = this.extractTextFromBody(textBody);
               return text;
@@ -383,11 +382,11 @@ export class PptxVisualParser {
   /**
    * Parse all visual elements in a slide
    */
-  private async parseSlideElements(slideDoc: any, slideNumber: number): Promise<VisualElement[]> {
+  private async parseSlideElements(slideDoc: unknown, slideNumber: number): Promise<readonly VisualElement[]> {
     const elements: VisualElement[] = [];
     
     try {
-      const spTree = slideDoc?.['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0];
+      const spTree = (slideDoc as { 'p:sld'?: { 'p:cSld'?: readonly { 'p:spTree'?: readonly { 'p:sp'?: readonly unknown[], 'p:grpSp'?: readonly unknown[], 'p:pic'?: readonly unknown[], 'p:graphicFrame'?: readonly unknown[] }[] }[] } })?.['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0];
       
       if (!spTree) {
         return elements;
@@ -430,7 +429,7 @@ export class PptxVisualParser {
       const charts = spTree['p:graphicFrame'];
       if (charts && Array.isArray(charts)) {
         for (const chart of charts) {
-          const element = await this.parseChart(chart, slideNumber);
+          const element = await this.parseChart(chart);
           if (element) {
             elements.push(element);
           }
@@ -447,19 +446,19 @@ export class PptxVisualParser {
   /**
    * Parse a shape element
    */
-  private async parseShape(shape: any, slideNumber: number): Promise<VisualElement | null> {
+  private async parseShape(shape: unknown, _slideNumber: number): Promise<VisualElement | null> {
     try {
-      const id = shape?.['p:nvSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
-      const name = shape?.['p:nvSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'shape';
+      const id = (shape as { 'p:nvSpPr'?: readonly { 'p:cNvPr'?: readonly { $: { id: string, name: string } }[] }[] })?.['p:nvSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
+      const name = (shape as { 'p:nvSpPr'?: readonly { 'p:cNvPr'?: readonly { $: { name: string } }[] }[] })?.['p:nvSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'shape';
       
       // Extract position and size
-      const spPr = shape?.['p:spPr']?.[0];
-      const xfrm = spPr?.['a:xfrm']?.[0];
+      const spPr = (shape as { 'p:spPr'?: readonly unknown[] })?.['p:spPr']?.[0];
+      const xfrm = (spPr as { 'a:xfrm'?: readonly unknown[] })?.['a:xfrm']?.[0];
       const position = this.extractPosition(xfrm);
       const size = this.extractSize(xfrm);
       
       // Check if it has text content
-      const textBody = shape?.['p:txBody']?.[0];
+      const textBody = (shape as { 'p:txBody'?: readonly unknown[] })?.['p:txBody']?.[0];
       
       if (textBody) {
         // Text element
@@ -500,14 +499,14 @@ export class PptxVisualParser {
   /**
    * Parse a group element
    */
-  private async parseGroup(group: any, slideNumber: number): Promise<VisualElement | null> {
+  private async parseGroup(group: unknown, slideNumber: number): Promise<VisualElement | null> {
     try {
-      const id = group?.['p:nvGrpSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
-      const name = group?.['p:nvGrpSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'group';
+      const id = (group as { 'p:nvGrpSpPr'?: readonly { 'p:cNvPr'?: readonly { $: { id: string, name: string } }[] }[] })?.['p:nvGrpSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
+      const name = (group as { 'p:nvGrpSpPr'?: readonly { 'p:cNvPr'?: readonly { $: { name: string } }[] }[] })?.['p:nvGrpSpPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'group';
       
       // Extract position and size
-      const grpSpPr = group?.['p:grpSpPr']?.[0];
-      const xfrm = grpSpPr?.['a:xfrm']?.[0];
+      const grpSpPr = (group as { 'p:grpSpPr'?: readonly unknown[] })?.['p:grpSpPr']?.[0];
+      const xfrm = (grpSpPr as { 'a:xfrm'?: readonly unknown[] })?.['a:xfrm']?.[0];
       const position = this.extractPosition(xfrm);
       const size = this.extractSize(xfrm);
       
@@ -515,7 +514,7 @@ export class PptxVisualParser {
       const children: VisualElement[] = [];
       
       // Child shapes
-      const shapes = group['p:sp'];
+      const shapes = (group as { 'p:sp'?: readonly unknown[] })['p:sp'];
       if (shapes && Array.isArray(shapes)) {
         for (const shape of shapes) {
           const child = await this.parseShape(shape, slideNumber);
@@ -540,19 +539,19 @@ export class PptxVisualParser {
   /**
    * Parse a picture element
    */
-  private async parsePicture(pic: any, slideNumber: number): Promise<VisualElement | null> {
+  private async parsePicture(pic: unknown, slideNumber: number): Promise<VisualElement | null> {
     try {
-      const id = pic?.['p:nvPicPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
-      const name = pic?.['p:nvPicPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'image';
+      const id = (pic as { 'p:nvPicPr'?: readonly { 'p:cNvPr'?: readonly { $: { id: string, name: string } }[] }[] })?.['p:nvPicPr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
+      const name = (pic as { 'p:nvPicPr'?: readonly { 'p:cNvPr'?: readonly { $: { name: string } }[] }[] })?.['p:nvPicPr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'image';
       
       // Extract position and size
-      const spPr = pic?.['p:spPr']?.[0];
-      const xfrm = spPr?.['a:xfrm']?.[0];
+      const spPr = (pic as { 'p:spPr'?: readonly unknown[] })?.['p:spPr']?.[0];
+      const xfrm = (spPr as { 'a:xfrm'?: readonly unknown[] })?.['a:xfrm']?.[0];
       const position = this.extractPosition(xfrm);
       const size = this.extractSize(xfrm);
       
       // Extract image reference
-      const blip = pic?.['p:blipFill']?.[0]?.['a:blip']?.[0];
+      const blip = (pic as { 'p:blipFill'?: readonly { 'a:blip'?: readonly { $: { 'r:embed': string } }[] }[] })?.['p:blipFill']?.[0]?.['a:blip']?.[0];
       const rEmbed = blip?.$?.['r:embed'];
       
       let imagePath = '';
@@ -584,13 +583,13 @@ export class PptxVisualParser {
   /**
    * Parse a chart element
    */
-  private async parseChart(chart: any, slideNumber: number): Promise<VisualElement | null> {
+  private async parseChart(chart: unknown): Promise<VisualElement | null> {
     try {
-      const id = chart?.['p:nvGraphicFramePr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
-      const name = chart?.['p:nvGraphicFramePr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'chart';
+      const id = (chart as { 'p:nvGraphicFramePr'?: readonly { 'p:cNvPr'?: readonly { $: { id: string, name: string } }[] }[] })?.['p:nvGraphicFramePr']?.[0]?.['p:cNvPr']?.[0]?.$.id || 'unknown';
+      const name = (chart as { 'p:nvGraphicFramePr'?: readonly { 'p:cNvPr'?: readonly { $: { name: string } }[] }[] })?.['p:nvGraphicFramePr']?.[0]?.['p:cNvPr']?.[0]?.$.name || 'chart';
       
       // Extract position and size
-      const xfrm = chart?.['p:xfrm']?.[0];
+      const xfrm = (chart as { 'p:xfrm'?: readonly unknown[] })?.['p:xfrm']?.[0];
       const position = this.extractPosition(xfrm);
       const size = this.extractSize(xfrm);
       
@@ -612,12 +611,12 @@ export class PptxVisualParser {
   }
 
   // Helper methods
-  private extractPosition(xfrm: any): ElementPosition {
+  private extractPosition(xfrm: unknown): ElementPosition {
     try {
-      const off = xfrm?.['a:off']?.[0];
+      const off = (xfrm as { 'a:off'?: readonly { $: { x: string, y: string } }[] })?.['a:off']?.[0];
       return {
-        x: parseInt(off?.$.x || '0'),
-        y: parseInt(off?.$.y || '0'),
+        x: parseInt(off?.$.x || '0', 10),
+        y: parseInt(off?.$.y || '0', 10),
         z: 0
       };
     } catch {
@@ -625,24 +624,24 @@ export class PptxVisualParser {
     }
   }
 
-  private extractSize(xfrm: any): ElementSize {
+  private extractSize(xfrm: unknown): ElementSize {
     try {
-      const ext = xfrm?.['a:ext']?.[0];
+      const ext = (xfrm as { 'a:ext'?: readonly { $: { cx: string, cy: string } }[] })?.['a:ext']?.[0];
       return {
-        width: parseInt(ext?.$.cx || '0'),
-        height: parseInt(ext?.$.cy || '0')
+        width: parseInt(ext?.$.cx || '0', 10),
+        height: parseInt(ext?.$.cy || '0', 10)
       };
     } catch {
       return { width: 0, height: 0 };
     }
   }
 
-  private extractElementStyle(spPr: any, textBody?: any): ElementStyle {
+  private extractElementStyle(spPr: unknown, textBody?: unknown): ElementStyle {
     const style: ElementStyle = {};
     
     try {
       // Extract fill color
-      const solidFill = spPr?.['a:solidFill']?.[0];
+      const solidFill = (spPr as { 'a:solidFill'?: readonly unknown[] })?.['a:solidFill']?.[0];
       if (solidFill) {
         // This is simplified - real implementation would handle various color formats
         style.fill = '#000000';
@@ -650,7 +649,7 @@ export class PptxVisualParser {
       
       // Extract font information from text body
       if (textBody) {
-        const defRPr = textBody?.['a:lstStyle']?.[0]?.['a:lvl1pPr']?.[0]?.['a:defRPr']?.[0];
+        const defRPr = (textBody as { 'a:lstStyle'?: readonly { 'a:lvl1pPr'?: readonly { 'a:defRPr'?: readonly unknown[] }[] }[] })?.['a:lstStyle']?.[0]?.['a:lvl1pPr']?.[0]?.['a:defRPr']?.[0];
         if (defRPr) {
           style.font = this.extractFontInfo(defRPr);
         }
@@ -662,23 +661,23 @@ export class PptxVisualParser {
     return style;
   }
 
-  private extractFontInfo(rPr: any): FontInfo {
+  private extractFontInfo(rPr: unknown): FontInfo {
     return {
-      family: rPr?.['a:latin']?.[0]?.$.typeface || 'Arial',
-      size: parseInt(rPr?.$.sz || '1800') / 100, // Convert from hundredths of points
+      family: (rPr as { 'a:latin'?: readonly { $: { typeface: string } }[] })?.['a:latin']?.[0]?.$.typeface || 'Arial',
+      size: parseInt((rPr as { $: { sz: string } })?.$.sz || '1800', 10) / 100, // Convert from hundredths of points
       color: '#000000', // Simplified
-      bold: rPr?.$.b === '1',
-      italic: rPr?.$.i === '1',
-      underline: rPr?.$.u !== undefined
+      bold: (rPr as { $: { b: string } })?.$.b === '1',
+      italic: (rPr as { $: { i: string } })?.$.i === '1',
+      underline: (rPr as { $: { u: string } })?.$.u !== undefined
     };
   }
 
-  private extractTextFromBody(textBody: any): string {
+  private extractTextFromBody(textBody: unknown): string {
     try {
-      const paragraphs = textBody?.['a:p'];
+      const paragraphs = (textBody as { 'a:p'?: readonly unknown[] })?.['a:p'];
       if (paragraphs && Array.isArray(paragraphs)) {
         return paragraphs
-          .map((p: any) => this.extractTextFromParagraph(p))
+          .map((p) => this.extractTextFromParagraph(p))
           .filter(text => text.length > 0)
           .join('\n');
       }
@@ -688,11 +687,11 @@ export class PptxVisualParser {
     return '';
   }
 
-  private extractParagraphsFromBody(textBody: any): TextParagraph[] {
+  private extractParagraphsFromBody(textBody: unknown): readonly TextParagraph[] {
     const paragraphs: TextParagraph[] = [];
     
     try {
-      const pArray = textBody?.['a:p'];
+      const pArray = (textBody as { 'a:p'?: readonly unknown[] })?.['a:p'];
       if (pArray && Array.isArray(pArray)) {
         for (const p of pArray) {
           const text = this.extractTextFromParagraph(p);
@@ -701,7 +700,7 @@ export class PptxVisualParser {
               text,
               runs: this.extractTextRuns(p),
               alignment: this.extractAlignment(p),
-              level: parseInt(p?.['a:pPr']?.[0]?.$.lvl || '0')
+              level: parseInt((p as { 'a:pPr'?: readonly { $: { lvl: string } }[] })?.['a:pPr']?.[0]?.$.lvl || '0', 10)
             });
           }
         }
@@ -713,22 +712,22 @@ export class PptxVisualParser {
     return paragraphs;
   }
 
-  private extractTextFromParagraph(p: any): string {
+  private extractTextFromParagraph(p: unknown): string {
     try {
-      const runs = p?.['a:r'] || [];
+      const runs = (p as { 'a:r'?: readonly { 'a:t'?: readonly [string] }[] })?.['a:r'] || [];
       return runs
-        .map((run: any) => run?.['a:t']?.[0] || '')
+        .map((run) => run?.['a:t']?.[0] || '')
         .join('');
     } catch {
       return '';
     }
   }
 
-  private extractTextRuns(p: any): TextRun[] {
+  private extractTextRuns(p: unknown): readonly TextRun[] {
     const runs: TextRun[] = [];
     
     try {
-      const runArray = p?.['a:r'];
+      const runArray = (p as { 'a:r'?: readonly { 'a:t'?: readonly [string], 'a:rPr'?: readonly unknown[] }[] })?.['a:r'];
       if (runArray && Array.isArray(runArray)) {
         for (const run of runArray) {
           const text = run?.['a:t']?.[0] || '';
@@ -747,9 +746,9 @@ export class PptxVisualParser {
     return runs;
   }
 
-  private extractAlignment(p: any): 'left' | 'center' | 'right' | 'justify' {
+  private extractAlignment(p: unknown): 'left' | 'center' | 'right' | 'justify' {
     try {
-      const algn = p?.['a:pPr']?.[0]?.$.algn;
+      const algn = (p as { 'a:pPr'?: readonly { $: { algn: string } }[] })?.['a:pPr']?.[0]?.$.algn;
       switch (algn) {
         case 'ctr': return 'center';
         case 'r': return 'right';
@@ -761,23 +760,23 @@ export class PptxVisualParser {
     }
   }
 
-  private extractShapeType(spPr: any): string {
+  private extractShapeType(spPr: unknown): string {
     try {
-      const prstGeom = spPr?.['a:prstGeom']?.[0];
+      const prstGeom = (spPr as { 'a:prstGeom'?: readonly { $: { prst: string } }[] })?.['a:prstGeom']?.[0];
       return prstGeom?.$.prst || 'unknown';
     } catch {
       return 'unknown';
     }
   }
 
-  private extractShapeGeometry(spPr: any): any {
+  private extractShapeGeometry(spPr: unknown): unknown {
     try {
-      const custGeom = spPr?.['a:custGeom']?.[0];
+      const custGeom = (spPr as { 'a:custGeom'?: readonly unknown[] })?.['a:custGeom']?.[0];
       if (custGeom) {
         return custGeom;
       }
       
-      const prstGeom = spPr?.['a:prstGeom']?.[0];
+      const prstGeom = (spPr as { 'a:prstGeom'?: readonly { $: { prst: string } }[] })?.['a:prstGeom']?.[0];
       if (prstGeom) {
         return { preset: prstGeom.$.prst };
       }
@@ -789,7 +788,7 @@ export class PptxVisualParser {
 
   private findRelationshipTarget(sourceId: string, relationshipId: string): { target: string; type: string } | null {
     try {
-      const rels = this.relationships.get(sourceId);
+      const rels = this.relationships.get(sourceId) as { Relationships?: { Relationship?: { $: { Id: string, Target: string, Type: string } }[] | { $: { Id: string, Target: string, Type: string } } } };
       if (rels?.Relationships?.Relationship) {
         const relationships = Array.isArray(rels.Relationships.Relationship) 
           ? rels.Relationships.Relationship 

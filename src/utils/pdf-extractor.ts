@@ -75,7 +75,7 @@ export class PDFExtractor {
   /**
    * Enhance text with layout detection
    */
-  async enhanceTextWithLayout(text: string, pdfData?: unknown): Promise<string> {
+  async enhanceTextWithLayout(text: string, _pdfData?: unknown): Promise<string> {
     const lines = text.split('\n');
     let enhancedText = '';
     let inTable = false;
@@ -124,12 +124,12 @@ export class PDFExtractor {
       
       // Detect lists
       if (this.isListItem(line)) {
-        enhancedText += this.formatListItem(line) + '\n';
+        enhancedText += `${this.formatListItem(line)}\n`;
         continue;
       }
       
       // Regular paragraph
-      enhancedText += line + '\n';
+      enhancedText += `${line}\n`;
     }
     
     // Handle any remaining table
@@ -170,11 +170,11 @@ export class PDFExtractor {
   private isLikelyTableRow(line: string): boolean {
     // Look for patterns that suggest tabular data
     const patterns = [
-      /\t+/,                    // Tab separated
+      /\t+/,
       /\s{3,}/,                 // Multiple spaces
       /\|/,                     // Pipe separated
-      /\s+\d+\s+/,              // Numbers with spaces
-      /^\s*\d+\.\s+/,           // Numbered items with alignment
+      /\s+\d+\s+/,
+      /^\s*\d+\.\s+/,
     ];
     
     return patterns.some(pattern => pattern.test(line));
@@ -204,8 +204,7 @@ export class PDFExtractor {
     
     let markdown = '';
     
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    for (const [i, row] of rows.entries()) {
       let rowMarkdown = '|';
       
       for (let j = 0; j < maxCols; j++) {
@@ -213,7 +212,7 @@ export class PDFExtractor {
         rowMarkdown += ` ${cell} |`;
       }
       
-      markdown += rowMarkdown + '\n';
+      markdown += `${rowMarkdown}\n`;
       
       // Add header separator after first row
       if (i === 0) {
@@ -221,20 +220,20 @@ export class PDFExtractor {
         for (let j = 0; j < maxCols; j++) {
           separator += ' --- |';
         }
-        markdown += separator + '\n';
+        markdown += `${separator}\n`;
       }
     }
     
-    return markdown + '\n';
+    return `${markdown}\n`;
   }
 
   private isListItem(line: string): boolean {
     // Check for various list patterns
     const listPatterns = [
-      /^\s*[-•·]\s+/,           // Bullet points
-      /^\s*\d+\.\s+/,           // Numbered lists
-      /^\s*[a-zA-Z]\.\s+/,      // Lettered lists
-      /^\s*[ivx]+\.\s+/i,       // Roman numerals
+      /^\s*[-•·]\s+/,
+      /^\s*\d+\.\s+/,
+      /^\s*[a-zA-Z]\.\s+/,
+      /^\s*[ivx]+\.\s+/i,
     ];
     
     return listPatterns.some(pattern => pattern.test(line));
@@ -259,8 +258,7 @@ export class PDFExtractor {
   async createPageBreaks(pageImages: readonly PageData[]): Promise<string> {
     let markdown = '';
     
-    for (let i = 0; i < pageImages.length; i++) {
-      const page = pageImages[i];
+    for (const [i, page] of pageImages.entries()) {
       markdown += `## Page ${page.pageNumber}\n\n`;
       markdown += this.imageExtractor.getImageMarkdown(`Page ${page.pageNumber}`, page.imagePath);
       markdown += '\n\n';

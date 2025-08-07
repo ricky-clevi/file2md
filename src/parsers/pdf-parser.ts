@@ -33,7 +33,7 @@ export async function parsePdf(
       try {
         const enhancedText = await pdfExtractor.enhanceTextWithLayout(data.text, data);
         markdown += enhancedText;
-      } catch (layoutError: unknown) {
+      } catch {
         console.warn('Layout enhancement failed, falling back to basic text extraction');
         // Fall back to basic text extraction
         markdown = extractBasicText(data.text);

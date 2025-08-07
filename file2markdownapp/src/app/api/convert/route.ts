@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir, unlink, rmdir } from 'fs/promises';
+import { writeFile, mkdir, unlink, rmdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -244,7 +244,6 @@ async function cleanupTempFiles(tempFilePath: string, imageDir: string): Promise
 
     // Remove image directory and its contents using robust rm
     if (existsSync(imageDir)) {
-      const { rm } = await import('fs/promises');
       await rm(imageDir, { recursive: true, force: true });
     }
   } catch (error) {

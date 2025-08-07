@@ -2,7 +2,6 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { platform } from 'os';
 import fs from 'fs/promises';
-import path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -17,6 +16,7 @@ export class LibreOfficeDetector {
   private static instance: LibreOfficeDetector;
   private cachedInfo?: LibreOfficeInfo;
 
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
   private constructor() {}
 
   static getInstance(): LibreOfficeDetector {
@@ -76,8 +76,8 @@ export class LibreOfficeDetector {
     const possiblePaths = [
       'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
       'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-      process.env['PROGRAMFILES'] + '\\LibreOffice\\program\\soffice.exe',
-      process.env['PROGRAMFILES(X86)'] + '\\LibreOffice\\program\\soffice.exe'
+      `${process.env['PROGRAMFILES']}\\LibreOffice\\program\\soffice.exe`,
+      `${process.env['PROGRAMFILES(X86)']}\\LibreOffice\\program\\soffice.exe`
     ];
 
     // Try common installation paths

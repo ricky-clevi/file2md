@@ -33,8 +33,8 @@ interface WorkbookSheet {
 }
 
 interface SharedStringItem {
-  readonly t?: [string];
-  readonly r?: Array<{ readonly t?: [string] }>;
+  readonly t?: readonly [string];
+  readonly r?: readonly { readonly t?: [string] }[];
 }
 
 interface CellFormat {
@@ -54,9 +54,9 @@ interface FillData {
 }
 
 interface StylesData {
-  readonly fonts: FontData[];
-  readonly fills: FillData[];
-  readonly cellXfs: CellFormat[];
+  readonly fonts: readonly FontData[];
+  readonly fills: readonly FillData[];
+  readonly cellXfs: readonly CellFormat[];
 }
 
 /**
@@ -64,7 +64,7 @@ interface StylesData {
  */
 export async function parseXlsx(
   buffer: Buffer,
-  imageExtractor: ImageExtractor,
+  _imageExtractor: ImageExtractor,
   chartExtractor: ChartExtractor,
   options: XlsxParseOptions = {}
 ): Promise<XlsxParseResult> {
@@ -114,17 +114,17 @@ export async function parseXlsx(
   }
 }
 
-async function getSharedStrings(zip: JSZip): Promise<string[]> {
+async function getSharedStrings(zip: JSZip): Promise<readonly string[]> {
   const sharedStringsFile = zip.file('xl/sharedStrings.xml');
   if (!sharedStringsFile) return [];
   
   try {
     const xmlContent = await sharedStringsFile.async('string');
-    const result = await parseStringPromise(xmlContent) as any;
+    const result = await parseStringPromise(xmlContent) as { sst?: { si?: readonly SharedStringItem[] } };
     
     const strings: string[] = [];
     if (result.sst?.si) {
-      for (const si of result.sst.si as SharedStringItem[]) {
+      for (const si of result.sst.si) {
         if (si.t?.[0]) {
           strings.push(si.t[0]);
         } else if (si.r) {
@@ -146,7 +146,7 @@ async function getSharedStrings(zip: JSZip): Promise<string[]> {
   }
 }
 
-async function getWorkbook(zip: JSZip): Promise<WorkbookSheet[]> {
+async function getWorkbook(zip: JSZip): Promise<readonly WorkbookSheet[]> {
   const workbookFile = zip.file('xl/workbook.xml');
   if (!workbookFile) {
     throw new InvalidFileError('Invalid XLSX file: missing workbook.xml');
@@ -154,7 +154,7 @@ async function getWorkbook(zip: JSZip): Promise<WorkbookSheet[]> {
   
   try {
     const xmlContent = await workbookFile.async('string');
-    const result = await parseStringPromise(xmlContent) as any;
+    const result = await parseStringPromise(xmlContent) as { workbook?: { sheets?: readonly { sheet?: readonly { $: { name: string, sheetId: string, 'r:id': string } }[] }[] } };
     
     const sheets: WorkbookSheet[] = [];
     if (result.workbook?.sheets?.[0]?.sheet) {
@@ -180,9 +180,9 @@ async function getStyles(zip: JSZip): Promise<StylesData> {
   
   try {
     const xmlContent = await stylesFile.async('string');
-    const result = await parseStringPromise(xmlContent) as any;
+    const result = await parseStringPromise(xmlContent) as { styleSheet?: { fonts?: readonly { font?: readonly { b?: readonly unknown[], i?: readonly unknown[], sz?: readonly { $: { val: string } }[] }[] }[], fills?: readonly { fill?: readonly { patternFill?: readonly { bgColor?: readonly { $: { rgb: string } }[] }[] }[] }[], cellXfs?: readonly { xf?: readonly { $: { fontId: string, fillId: string }, alignment?: readonly { $: { horizontal: string } }[] }[] }[] } };
     
-    const styles: StylesData = {
+    const styles: { fonts: FontData[], fills: FillData[], cellXfs: CellFormat[] } = {
       fonts: [],
       fills: [],
       cellXfs: []
@@ -215,8 +215,8 @@ async function getStyles(zip: JSZip): Promise<StylesData> {
     if (result.styleSheet?.cellXfs?.[0]?.xf) {
       for (const xf of result.styleSheet.cellXfs[0].xf) {
         const cellFormat: CellFormat = {
-          fontId: parseInt(xf.$.fontId) || 0,
-          fillId: parseInt(xf.$.fillId) || 0,
+          fontId: parseInt(xf.$.fontId, 10) || 0,
+          fillId: parseInt(xf.$.fillId, 10) || 0,
           alignment: 'left'
         };
         
@@ -237,9 +237,9 @@ async function getStyles(zip: JSZip): Promise<StylesData> {
 
 async function getWorksheets(
   zip: JSZip,
-  workbook: WorkbookSheet[],
+  workbook: readonly WorkbookSheet[],
   styles: StylesData,
-  sharedStrings: string[]
+  sharedStrings: readonly string[]
 ): Promise<Map<string, TableData>> {
   const worksheets = new Map<string, TableData>();
   
@@ -250,7 +250,7 @@ async function getWorksheets(
     if (worksheetFile) {
       try {
         const xmlContent = await worksheetFile.async('string');
-        const result = await parseStringPromise(xmlContent) as any;
+        const result = await parseStringPromise(xmlContent) as { worksheet?: { sheetData?: readonly { row?: readonly { $: { r: string }, c?: readonly { $: { r: string, s?: string, t?: string }, v?: readonly [string] }[] }[] }[] } };
         
         const sheetData: TableData = { rows: [] };
         
@@ -258,11 +258,11 @@ async function getWorksheets(
           const processedRows: RowData[] = [];
           
           for (const row of result.worksheet.sheetData[0].row) {
-            const rowNum = parseInt(row.$.r);
+            const rowNum = parseInt(row.$.r, 10);
             const rowData: RowData = { cells: [] };
             
             if (row.c) {
-              const maxCol = Math.max(...row.c.map((cell: any) => getColumnIndex(cell.$.r)));
+              const maxCol = Math.max(...row.c.map((cell) => getColumnIndex(cell.$.r)));
               
               // Initialize all cells in the row
               for (let col = 0; col <= maxCol; col++) {
@@ -301,7 +301,7 @@ async function getWorksheets(
                 
                 // Apply styling if available
                 if (cell.$.s && styles.cellXfs.length > 0) {
-                  const styleIndex = parseInt(cell.$.s);
+                  const styleIndex = parseInt(cell.$.s, 10);
                   const cellFormat = styles.cellXfs[styleIndex];
                   
                   if (cellFormat) {
@@ -326,7 +326,7 @@ async function getWorksheets(
                 
                 // Handle shared strings
                 if (cell.$.t === 's' && cellValue) {
-                  const stringIndex = parseInt(cellValue);
+                  const stringIndex = parseInt(cellValue, 10);
                   if (stringIndex < sharedStrings.length) {
                     cellData.text = sharedStrings[stringIndex];
                   }

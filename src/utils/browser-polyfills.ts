@@ -10,7 +10,7 @@
 export class IntersectionObserver {
   public root: Element | Document | null = null;
   public rootMargin: string = '0px';
-  public thresholds: ReadonlyArray<number> = [0];
+  public thresholds: readonly number[] = [0];
   
   private callback: IntersectionObserverCallback;
   private options: IntersectionObserverInit | undefined;
@@ -49,11 +49,11 @@ export class IntersectionObserver {
 
     // Trigger callback asynchronously
     setTimeout(() => {
-      this.callback([mockEntry], this as any);
+      this.callback([mockEntry], this as unknown as globalThis.IntersectionObserver);
     }, 0);
   }
 
-  unobserve(target: Element): void {
+  unobserve(_target: Element): void {
     // No-op in Node.js
   }
 
@@ -76,7 +76,7 @@ export class ResizeObserver {
     this.callback = callback;
   }
 
-  observe(target: Element, options?: ResizeObserverOptions): void {
+  observe(target: Element, _options?: ResizeObserverOptions): void {
     // Mock resize entry
     const mockEntry: ResizeObserverEntry = {
       target,
@@ -95,7 +95,7 @@ export class ResizeObserver {
     }, 0);
   }
 
-  unobserve(target: Element): void {
+  unobserve(_target: Element): void {
     // No-op
   }
 
@@ -114,7 +114,7 @@ export class MutationObserver {
     this.callback = callback;
   }
 
-  observe(target: Node, options?: MutationObserverInit): void {
+  observe(_target: Node, _options?: MutationObserverInit): void {
     // No-op in Node.js - just don't call the callback
   }
 
@@ -135,21 +135,21 @@ export function setupBrowserPolyfills(): void {
   // Only set up if not already defined (avoid overriding in browser environment)
   if (typeof global !== 'undefined') {
     if (!global.IntersectionObserver) {
-      global.IntersectionObserver = IntersectionObserver as any;
+      global.IntersectionObserver = IntersectionObserver as unknown as typeof globalThis.IntersectionObserver;
     }
     
     if (!global.ResizeObserver) {
-      global.ResizeObserver = ResizeObserver as any;
+      global.ResizeObserver = ResizeObserver as unknown as typeof globalThis.ResizeObserver;
     }
     
     if (!global.MutationObserver) {
-      global.MutationObserver = MutationObserver as any;
+      global.MutationObserver = MutationObserver as unknown as typeof globalThis.MutationObserver;
     }
 
     // Add requestAnimationFrame polyfill if needed
     if (!global.requestAnimationFrame) {
       global.requestAnimationFrame = (callback: FrameRequestCallback): number => {
-        return setTimeout(callback, 16) as any; // ~60fps
+        return setTimeout(callback, 16) as unknown as number; // ~60fps
       };
     }
 
@@ -164,7 +164,7 @@ export function setupBrowserPolyfills(): void {
       global.performance = {
         now: () => Date.now(),
         timeOrigin: Date.now()
-      } as any;
+      } as unknown as Performance;
     }
   }
 }

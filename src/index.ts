@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { Buffer } from 'node:buffer';
-const fileType = require('file-type');
+import fileType from 'file-type';
 
 import { ImageExtractor } from './utils/image-extractor.js';
 import { ChartExtractor } from './utils/chart-extractor.js';
@@ -10,15 +10,12 @@ import { parseXlsx } from './parsers/xlsx-parser.js';
 import { parsePptx } from './parsers/pptx-parser.js';
 import { parseHwp } from './parsers/hwp-parser.js';
 
-import type {
-  ConvertInput,
-  ConvertOptions,
-  ConversionResult,
-  DocumentMetadata,
-  SupportedMimeType
-} from './types/index.js';
-
 import {
+  type ConvertInput,
+  type ConvertOptions,
+  type ConversionResult,
+  type DocumentMetadata,
+  type SupportedMimeType,
   FileNotFoundError,
   UnsupportedFormatError,
   InvalidFileError,
@@ -89,7 +86,7 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
       try {
         buffer = await fs.readFile(input);
       } catch (error: unknown) {
-        if ((error as any)?.code === 'ENOENT') {
+        if ((error as { code: string })?.code === 'ENOENT') {
           throw new FileNotFoundError(input);
         }
         throw new InvalidFileError(`Failed to read file: ${input}`, error as Error);
@@ -103,17 +100,19 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
     // Detect file type
     let detectedType = await fileType.fromBuffer(buffer);
     
-    // Enhanced HWP/HWPX detection if file-type module fails or detects CFB
-    if (!detectedType || detectedType.mime === 'application/x-cfb') {
+    // Enhanced HWP/HWPX detection if file-type module fails or detects CFB/ZIP
+    if (!detectedType || detectedType.mime === 'application/x-cfb' || detectedType.mime === 'application/zip') {
       const hwpFormat = detectHwpFormat(buffer);
-      if (hwpFormat === 'hwp') {
-        detectedType = { mime: 'application/x-hwp', ext: 'hwp' };
-      } else if (hwpFormat === 'hwpx') {
-        detectedType = { mime: 'application/x-hwpx', ext: 'hwpx' };
+      if (hwpFormat !== 'unknown') {
+        detectedType = {
+          ...detectedType,
+          ext: hwpFormat as any,
+          mime: `application/x-${hwpFormat}` as any
+        };
       } else if (!detectedType) {
         throw new UnsupportedFormatError('unknown');
       }
-      // If it's CFB but not HWP, let it continue with the original detection
+      // If it's CFB/ZIP but not HWP/HWPX, let it continue with the original detection
     }
 
     // Validate supported format
@@ -125,7 +124,6 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
     // Setup extractors
     const {
       imageDir = 'images',
-      outputDir,
       preserveLayout = true,
       extractCharts = true,
       extractImages = true,

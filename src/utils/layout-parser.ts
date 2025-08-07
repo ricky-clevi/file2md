@@ -1,12 +1,8 @@
 import type { 
   TableData, 
-  CellData, 
-  RowData, 
   ListData, 
   ListItem, 
-  Position, 
-  LayoutElement, 
-  TextAlignment 
+  Position
 } from '../types/interfaces.js';
 
 export interface TableFormatOptions {
@@ -32,7 +28,6 @@ export class LayoutParser {
 
     const { 
       preserveAlignment = true, 
-      showBorders = true,
       preserveColors = false 
     } = options;
 
@@ -41,8 +36,7 @@ export class LayoutParser {
     const colCount = Math.max(...rows.map(row => row.cells ? row.cells.length : 0));
 
     // Process each row
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-      const row = rows[rowIndex];
+    for (const [rowIndex, row] of rows.entries()) {
       let rowMarkdown = '|';
       
       if (!row.cells) continue;
@@ -83,7 +77,7 @@ export class LayoutParser {
           switch (cell.alignment) {
             case 'center': {
               const padding = Math.floor((cellWidth - cellContent.length) / 2);
-              cellContent = ' '.repeat(padding) + cellContent + ' '.repeat(padding);
+              cellContent = `${' '.repeat(padding)}${cellContent}${' '.repeat(padding)}`;
               break;
             }
             case 'right': {
@@ -102,13 +96,12 @@ export class LayoutParser {
         rowMarkdown += ` ${cellContent} |`;
       }
 
-      markdown += rowMarkdown + '\n';
+      markdown += `${rowMarkdown}\n`;
 
       // Add header separator after first row
       if (rowIndex === 0) {
         let separator = '|';
-        for (let i = 0; i < colCount; i++) {
-          const cell = rows[0]?.cells?.[i];
+        for (const cell of rows[0].cells) {
           let sepContent = ' --- ';
           
           // Apply alignment in separator
@@ -126,9 +119,10 @@ export class LayoutParser {
                 break;
             }
           }
-          separator += sepContent + '|';
+          separator += `${sepContent}|`;
         }
-        markdown += separator + '\n';
+        markdown += `${separator}
+`;
       }
     }
 
@@ -140,8 +134,6 @@ export class LayoutParser {
    */
   parseList(listData: ListData): string {
     if (!listData.items || listData.items.length === 0) return '';
-
-    let markdown = '';
     
     const processListItems = (items: readonly ListItem[], level: number = 0): string => {
       let result = '';
@@ -187,7 +179,7 @@ export class LayoutParser {
       markdown += `> ${line}\n`;
     }
     
-    return markdown + '\n';
+    return `${markdown}\n`;
   }
 
   /**
@@ -218,13 +210,14 @@ export class LayoutParser {
     
     // Create a simple side-by-side layout without excessive table structure
     markdown += '|';
-    for (let i = 0; i < substantialColumns.length; i++) {
+    for (const [i] of substantialColumns.entries()) {
       markdown += ` Column ${i + 1} |`;
     }
     markdown += '\n';
     
     markdown += '|';
-    for (let i = 0; i < substantialColumns.length; i++) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const _ of substantialColumns) {
       markdown += ' --- |';
     }
     markdown += '\n';
@@ -234,12 +227,12 @@ export class LayoutParser {
     for (const column of substantialColumns) {
       const content = column.content || '';
       // Limit content length to prevent excessive table width
-      const truncated = content.length > 200 ? content.substring(0, 200) + '...' : content;
+      const truncated = content.length > 200 ? `${content.substring(0, 200)}...` : content;
       markdown += ` ${truncated.replace(/\n/g, '<br>')} |`;
     }
     markdown += '\n';
     
-    return markdown + '\n';
+    return `${markdown}\n`;
   }
 
   /**
@@ -313,7 +306,7 @@ export class LayoutParser {
     if (!text) return text;
     
     // Convert headers to bold text (since headers don't work well in table cells)
-    text = text.replace(/^(#{1,6})\s+(.+)$/gm, (match, hashes, content) => {
+    text = text.replace(/^(#{1,6})\s+(.+)$/gm, (_match, hashes, content) => {
       const level = hashes.length;
       // Convert headers to bold text with size indicators
       if (level <= 2) {

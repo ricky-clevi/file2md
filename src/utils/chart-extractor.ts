@@ -35,35 +35,35 @@ interface ChartXmlResult {
 }
 
 interface ChartSeriesData {
-  readonly 'c:ser'?: Array<{
-    readonly 'c:tx'?: [{
-      readonly 'c:strRef': [{
-        readonly 'c:strCache'?: [{
-          readonly 'c:pt': Array<{
-            readonly 'c:v': [string];
-          }>;
+  readonly 'c:ser'?: readonly {
+    readonly 'c:tx'?: readonly [{
+      readonly 'c:strRef': readonly [{
+        readonly 'c:strCache'?: readonly [{
+          readonly 'c:pt': readonly {
+            readonly 'c:v': readonly [string];
+          }[];
         }];
       }];
     }];
-    readonly 'c:val'?: [{
-      readonly 'c:numRef': [{
-        readonly 'c:numCache'?: [{
-          readonly 'c:pt': Array<{
-            readonly 'c:v': [string];
-          }>;
+    readonly 'c:val'?: readonly [{
+      readonly 'c:numRef': readonly [{
+        readonly 'c:numCache'?: readonly [{
+          readonly 'c:pt': readonly {
+            readonly 'c:v': readonly [string];
+          }[];
         }];
       }];
     }];
-    readonly 'c:cat'?: [{
-      readonly 'c:strRef': [{
-        readonly 'c:strCache'?: [{
-          readonly 'c:pt': Array<{
-            readonly 'c:v': [string];
-          }>;
+    readonly 'c:cat'?: readonly [{
+      readonly 'c:strRef': readonly [{
+        readonly 'c:strCache'?: readonly [{
+          readonly 'c:pt': readonly {
+            readonly 'c:v': readonly [string];
+          }[];
         }];
       }];
     }];
-  }>;
+  }[];
 }
 
 export class ChartExtractor {
@@ -85,8 +85,8 @@ export class ChartExtractor {
       if (relativePath.includes('/charts/') && relativePath.endsWith('.xml')) {
         charts.push({
           path: relativePath,
-          file: file,
-          basePath: basePath
+          file,
+          basePath
         });
       }
     });
@@ -99,7 +99,7 @@ export class ChartExtractor {
           extractedCharts.push({
             originalPath: chart.path,
             data: chartData,
-            basePath: chart.basePath
+            basePath
           });
         }
       } catch (error: unknown) {
@@ -178,13 +178,13 @@ export class ChartExtractor {
   private extractTextFromTitle(titleData: unknown): string {
     // Simplified title extraction - in a real implementation, this would need more robust typing
     try {
-      const title = titleData as any;
+      const title = titleData as { 'c:rich'?: readonly [{ 'a:p'?: readonly [{ 'a:r'?: readonly [{ 'a:t'?: readonly [string] }] }] }] };
       if (title?.['c:rich']?.[0]?.['a:p']) {
         const paragraphs = title['c:rich'][0]['a:p'];
         let titleText = '';
         for (const para of paragraphs) {
           if (para?.['a:r']?.[0]?.['a:t']?.[0]) {
-            titleText += para['a:r'][0]['a:t'][0] + ' ';
+            titleText += `${para['a:r'][0]['a:t'][0]} `;
           }
         }
         return titleText.trim();
@@ -263,10 +263,10 @@ export class ChartExtractor {
    */
   formatChartAsMarkdown(chartData: ChartData): string {
     this.chartCounter++;
-    let markdown = `#### Chart ${this.chartCounter}: ${chartData.title || chartData.type.toUpperCase() + ' Chart'}\n\n`;
+    let markdown = `#### Chart ${this.chartCounter}: ${chartData.title || `${chartData.type.toUpperCase()} Chart`}\n\n`;
     
     if (chartData.series.length === 0) {
-      return markdown + '*No chart data available*\n\n';
+      return `${markdown}*No chart data available*\n\n`;
     }
 
     switch (chartData.type) {
@@ -281,7 +281,7 @@ export class ChartExtractor {
         markdown += this.formatGenericChart(chartData);
     }
 
-    return markdown + '\n';
+    return `${markdown}\n`;
   }
 
   private formatBarLineChart(chartData: ChartData): string {
@@ -295,7 +295,8 @@ export class ChartExtractor {
     
     // Add separator
     markdown += '| --- |';
-    for (let i = 0; i < chartData.series.length; i++) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const _ of chartData.series) {
       markdown += ' --- |';
     }
     markdown += '\n';
@@ -345,8 +346,7 @@ export class ChartExtractor {
   private formatGenericChart(chartData: ChartData): string {
     let markdown = `*${chartData.type.toUpperCase()} chart with ${chartData.series.length} series*\n\n`;
     
-    for (let i = 0; i < chartData.series.length; i++) {
-      const series = chartData.series[i];
+    for (const [i, series] of chartData.series.entries()) {
       markdown += `**Series ${i + 1}: ${series.name}**\n`;
       markdown += `Values: ${series.values.join(', ')}\n`;
       if (series.categories && series.categories.length > 0) {

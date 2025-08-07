@@ -29,18 +29,13 @@ export interface DocxParseResult {
   readonly metadata: Record<string, unknown>;
 }
 
-interface DocxElement {
-  readonly 'w:p'?: readonly unknown[];
-  readonly 'w:tbl'?: readonly unknown[];
-}
-
 interface DocxBody {
   readonly 'w:p'?: readonly unknown[];
   readonly 'w:tbl'?: readonly unknown[];
 }
 
 interface DocxDocument {
-  readonly 'w:document': readonly [{
+  readonly 'w:document': readonly [{ 
     readonly 'w:body': readonly [DocxBody];
   }];
 }
@@ -89,19 +84,13 @@ export async function parseDocx(
     const result = await parseStringPromise(xmlContent) as DocxDocument;
     
     // Handle both array and non-array XML parsing results
-    let document: any = result['w:document'];
-    if (Array.isArray(document)) {
-      document = document[0];
-    }
+    const document: { 'w:body': readonly [DocxBody] } | undefined = result['w:document']?.[0];
     
     if (!document) {
       throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
     }
     
-    let body: any = document['w:body'];
-    if (Array.isArray(body)) {
-      body = body[0];
-    }
+    const body: DocxBody | undefined = document['w:body']?.[0];
     
     if (!body) {
       throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document body', new Error('Missing document body'));
@@ -112,7 +101,7 @@ export async function parseDocx(
     for (const element of body['w:p'] || []) {
       const paragraph = await parseParagraph(element, imageExtractor, extractedImages);
       if (paragraph.trim()) {
-        markdown += paragraph + '\n\n';
+        markdown += `${paragraph}\n\n`;
       }
     }
     
@@ -120,7 +109,7 @@ export async function parseDocx(
     for (const table of body['w:tbl'] || []) {
       const tableMarkdown = await parseAdvancedTable(table, layoutParser, imageExtractor, extractedImages);
       if (tableMarkdown.trim()) {
-        markdown += tableMarkdown + '\n\n';
+        markdown += `${tableMarkdown}\n\n`;
       }
     }
     
@@ -149,14 +138,14 @@ async function parseAdvancedTable(
   imageExtractor: ImageExtractor,
   extractedImages: readonly ImageData[]
 ): Promise<string> {
-  const tableData = table as any;
+  const tableData = table as { 'w:tr'?: readonly unknown[] };
   const rows = tableData['w:tr'] || [];
   if (rows.length === 0) return '';
 
   const tableStruct: TableData = { rows: [] };
   
   for (const row of rows) {
-    const cells = row['w:tc'] || [];
+    const cells = (row as { 'w:tc'?: readonly unknown[] })['w:tc'] || [];
     const rowData: RowData = { cells: [] };
     
     for (const cell of cells) {
@@ -172,11 +161,11 @@ async function parseAdvancedTable(
       };
       
       // Extract cell properties
-      const tcPr = cell['w:tcPr'];
+      const tcPr = (cell as { 'w:tcPr'?: readonly { 'w:gridSpan'?: readonly { $: { val: string } }[], 'w:vMerge'?: readonly unknown[], 'w:shd'?: readonly { $: { fill: string } }[] }[] })['w:tcPr'];
       if (tcPr?.[0]) {
         // Check for merged cells
         if (tcPr[0]['w:gridSpan']) {
-          cellData.colSpan = parseInt(tcPr[0]['w:gridSpan'][0].$.val) || 1;
+          cellData.colSpan = parseInt(tcPr[0]['w:gridSpan'][0].$.val, 10) || 1;
         }
         if (tcPr[0]['w:vMerge']) {
           cellData.merged = true;
@@ -189,9 +178,10 @@ async function parseAdvancedTable(
       }
       
       // Extract cell content
-      if (cell['w:p']) {
+      const cellContent = (cell as { 'w:p'?: readonly unknown[] });
+      if (cellContent['w:p']) {
         const cellTexts: string[] = [];
-        for (const paragraph of cell['w:p']) {
+        for (const paragraph of cellContent['w:p']) {
           const paragraphData = await parseAdvancedParagraph(paragraph, imageExtractor, extractedImages);
           if (paragraphData.text.trim()) {
             cellTexts.push(paragraphData.text);
@@ -223,7 +213,7 @@ async function parseAdvancedParagraph(
   imageExtractor: ImageExtractor,
   extractedImages: readonly ImageData[]
 ): Promise<ParagraphData> {
-  const para = paragraph as any;
+  const para = paragraph as { 'w:pPr'?: readonly { 'w:jc'?: readonly { $: { val: string } }[], 'w:numPr'?: readonly { 'w:ilvl'?: readonly { $: { val: string } }[] }[], 'w:pStyle'?: readonly { $: { val: string } }[] }[], 'w:r'?: readonly unknown[] };
   let text = '';
   let bold = false;
   let italic = false;
@@ -247,7 +237,7 @@ async function parseAdvancedParagraph(
     if (pPr[0]['w:numPr']) {
       isList = true;
       if (pPr[0]['w:numPr'][0]['w:ilvl']) {
-        listLevel = parseInt(pPr[0]['w:numPr'][0]['w:ilvl'][0].$.val) || 0;
+        listLevel = parseInt(pPr[0]['w:numPr'][0]['w:ilvl'][0].$.val, 10) || 0;
       }
     }
   }
@@ -255,26 +245,27 @@ async function parseAdvancedParagraph(
   if (para['w:r']) {
     for (const run of para['w:r']) {
       // Check for images/drawings
-      if (run['w:drawing'] || run['w:pict']) {
+      if ((run as { 'w:drawing'?: unknown, 'w:pict'?: unknown })['w:drawing'] || (run as { 'w:drawing'?: unknown, 'w:pict'?: unknown })['w:pict']) {
         const imageRef = await extractImageFromRun(run, imageExtractor, extractedImages);
         if (imageRef) {
-          text += imageRef + '\n';
+          text += `${imageRef}\n`;
         }
       }
       
       // Extract text with formatting
-      if (run['w:t']) {
+      const textContent = (run as { 'w:t'?: readonly (string | { _: string })[] });
+      if (textContent['w:t']) {
         let runText = '';
-        for (const textElement of run['w:t']) {
+        for (const textElement of textContent['w:t']) {
           if (typeof textElement === 'string') {
             runText += textElement;
           } else if (textElement && typeof textElement === 'object' && '_' in textElement) {
-            runText += (textElement as any)._;
+            runText += (textElement as { _: string })._;
           }
         }
         
         // Apply formatting
-        const rPr = run['w:rPr']?.[0];
+        const rPr = (run as { 'w:rPr'?: readonly { 'w:b'?: unknown, 'w:i'?: unknown, 'w:sz'?: readonly { $: { val: string } }[] }[] })['w:rPr']?.[0];
         if (rPr) {
           if (rPr['w:b']) {
             runText = `**${runText}**`;
@@ -285,7 +276,7 @@ async function parseAdvancedParagraph(
             italic = true;
           }
           if (rPr['w:sz']?.[0]?.$.val) {
-            fontSize = parseInt(rPr['w:sz'][0].$.val) / 2; // Convert half-points to points
+            fontSize = parseInt(rPr['w:sz'][0].$.val, 10) / 2; // Convert half-points to points
           }
         }
         
@@ -306,7 +297,7 @@ async function parseAdvancedParagraph(
     if (styleVal && (styleVal.includes('Heading') || styleVal.includes('heading'))) {
       const match = styleVal.match(/(\d+)/);
       if (match) {
-        const headingLevel = parseInt(match[1]);
+        const headingLevel = parseInt(match[1], 10);
         const hashes = '#'.repeat(Math.min(headingLevel, 6));
         text = `${hashes} ${text.trim()}`;
       }

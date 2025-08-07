@@ -24,19 +24,19 @@ export class ImageExtractor {
    * Extract images from a ZIP archive (DOCX, XLSX, PPTX)
    */
   async extractImagesFromZip(zip: JSZip, basePath: string = ''): Promise<readonly ImageData[]> {
-    const images: Array<{
+    const images: {
       path: string;
       file: JSZip.JSZipObject;
       basePath: string;
-    }> = [];
+    }[] = [];
     
     zip.forEach((relativePath, file) => {
       // Check for image files in common locations
       if (this.isImageFile(relativePath)) {
         images.push({
           path: relativePath,
-          file: file,
-          basePath: basePath
+          file,
+          basePath
         });
       }
     });
@@ -49,7 +49,7 @@ export class ImageExtractor {
         if (savedPath) {
           extractedImages.push({
             originalPath: img.path,
-            savedPath: savedPath,
+            savedPath,
             basePath: img.basePath,
             format: this.getImageFormat(img.path),
             size: imageData.length
@@ -96,8 +96,8 @@ export class ImageExtractor {
     return imageExtensions.includes(ext) || 
            filePath.includes('/media/') || 
            filePath.includes('/images/') ||
-           filePath.includes('\\media\\') || 
-           filePath.includes('\\images\\');
+           filePath.includes('/media/') || 
+           filePath.includes('/images/');
   }
 
   /**

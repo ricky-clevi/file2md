@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
 
-import { setupBrowserPolyfills, cleanupBrowserPolyfills } from '../utils/browser-polyfills.js';
+import { setupBrowserPolyfills } from '../utils/browser-polyfills.js';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
 import { ParseError } from '../types/errors.js';
@@ -87,7 +87,7 @@ function detectHwpFormat(buffer: Buffer): HwpFormat {
 async function parseHwpBinary(
   buffer: Buffer,
   imageExtractor: ImageExtractor,
-  chartExtractor: ChartExtractor,
+  _chartExtractor: ChartExtractor,
   options: HwpParseOptions
 ): Promise<HwpParseResult> {
   try {
@@ -113,17 +113,17 @@ async function parseHwpBinary(
     
     // Set global DOM objects for hwp.js
     global.document = dom.window.document;
-    global.window = dom.window as any;
+    global.window = dom.window as unknown as Window & typeof globalThis;
     
     // Ensure our polyfills are available in the DOM window as well
-    if (!(dom.window as any)['IntersectionObserver']) {
-      (dom.window as any)['IntersectionObserver'] = global.IntersectionObserver;
+    if (!(dom.window as unknown as { IntersectionObserver: unknown }).IntersectionObserver) {
+      (dom.window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = global.IntersectionObserver;
     }
-    if (!(dom.window as any)['ResizeObserver']) {
-      (dom.window as any)['ResizeObserver'] = global.ResizeObserver;
+    if (!(dom.window as unknown as { ResizeObserver: unknown }).ResizeObserver) {
+      (dom.window as unknown as { ResizeObserver: unknown }).ResizeObserver = global.ResizeObserver;
     }
-    if (!(dom.window as any)['MutationObserver']) {
-      (dom.window as any)['MutationObserver'] = global.MutationObserver;
+    if (!(dom.window as unknown as { MutationObserver: unknown }).MutationObserver) {
+      (dom.window as unknown as { MutationObserver: unknown }).MutationObserver = global.MutationObserver;
     }
     
     try {
@@ -133,7 +133,7 @@ async function parseHwpBinary(
       }
       
       // Initialize hwp.js viewer
-      const viewer = new Viewer(container, uint8Array);
+      new Viewer(container, uint8Array);
       
       // Wait for viewer to process the document
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -186,55 +186,133 @@ async function parseHwpBinary(
 async function parseHwpxXml(
   buffer: Buffer,
   imageExtractor: ImageExtractor,
-  chartExtractor: ChartExtractor,
+  _chartExtractor: ChartExtractor,
   options: HwpParseOptions
 ): Promise<HwpParseResult> {
   try {
     const zip = await JSZip.loadAsync(buffer);
     
+    // Log all files in the ZIP for debugging
+    const allFiles = Object.keys(zip.files);
+    console.log('HWPX archive contains files:', allFiles);
+    
     // Find main content files in HWPX (OWPML format)
+    // HWPX structure typically has sections in Contents/section0.xml, section1.xml, etc.
     const contentFiles = [
+      'Contents/section0.xml',
+      'Contents/section1.xml',
+      'Contents/content.hpf',
+      'Contents/header.xml',
       'Contents/content.xml',
       'content.xml',
       'Contents/document.xml',
       'document.xml',
       'Contents/body.xml',
-      'body.xml'
+      'body.xml',
+      'version.xml',
+      'mimetype'
     ];
+    
+    // Try to find any section files
+    const sectionFiles = allFiles.filter(f => f.match(/Contents\/section\d+\.xml/));
+    if (sectionFiles.length > 0) {
+      console.log('Found section files:', sectionFiles);
+    }
+    
+    // Try to find XML files
+    const xmlFiles = allFiles.filter(f => f.endsWith('.xml'));
+    if (xmlFiles.length > 0) {
+      console.log('Found XML files:', xmlFiles);
+    }
     
     let contentFile = null;
     let contentFileName = '';
-    for (const fileName of contentFiles) {
-      contentFile = zip.file(fileName);
-      if (contentFile) {
-        contentFileName = fileName;
-        break;
+    
+    // First try section files
+    if (sectionFiles.length > 0) {
+      contentFileName = sectionFiles[0];
+      contentFile = zip.file(contentFileName);
+    }
+    
+    // Then try our known content files
+    if (!contentFile) {
+      for (const fileName of contentFiles) {
+        contentFile = zip.file(fileName);
+        if (contentFile) {
+          contentFileName = fileName;
+          break;
+        }
+      }
+    }
+    
+    // If still not found, try any XML file
+    if (!contentFile && xmlFiles.length > 0) {
+      for (const xmlFile of xmlFiles) {
+        if (!xmlFile.includes('_rels') && !xmlFile.includes('meta')) {
+          contentFile = zip.file(xmlFile);
+          if (contentFile) {
+            contentFileName = xmlFile;
+            break;
+          }
+        }
       }
     }
     
     if (!contentFile) {
-      throw new ParseError('HWPX', 'No content XML file found in HWPX archive');
+      // Create a more informative error message
+      const fileList = allFiles.slice(0, 10).join(', ');
+      const moreFiles = allFiles.length > 10 ? ` ... and ${allFiles.length - 10} more files` : '';
+      throw new ParseError('HWPX', `No content XML file found in HWPX archive. Files found: ${fileList}${moreFiles}`);
     }
     
-    // Parse XML with fast-xml-parser
-    const xmlContent = await contentFile.async('string');
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: '@_',
-      textNodeName: '#text',
-      parseAttributeValue: true,
-      trimValues: true
-    });
+    // Parse all section files if multiple exist
+    let allContent = '';
     
-    const parsedXml = parser.parse(xmlContent);
-    console.log(`Parsed HWPX XML from ${contentFileName}`);
+    if (sectionFiles.length > 0) {
+      // Process all section files in order
+      for (const sectionFileName of sectionFiles.sort()) {
+        const sectionFile = zip.file(sectionFileName);
+        if (sectionFile) {
+          const xmlContent = await sectionFile.async('string');
+          const parser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: '@_', 
+            textNodeName: '#text',
+            parseAttributeValue: true,
+            trimValues: true
+          });
+          
+          const parsedXml = parser.parse(xmlContent);
+          console.log(`Parsed HWPX section: ${sectionFileName}`);
+          
+          // Convert each section to markdown and combine
+          const sectionMarkdown = convertOwpmlToMarkdown(parsedXml);
+          if (sectionMarkdown && sectionMarkdown.trim()) {
+            allContent += `${sectionMarkdown}\n\n`;
+          }
+        }
+      }
+    } else {
+      // Parse single content file
+      const xmlContent = await contentFile.async('string');
+      const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '@_', 
+        textNodeName: '#text',
+        parseAttributeValue: true,
+        trimValues: true
+      });
+      
+      const parsedXml = parser.parse(xmlContent);
+      console.log(`Parsed HWPX XML from ${contentFileName}`);
+      allContent = convertOwpmlToMarkdown(parsedXml);
+    }
     
     // Extract images from ZIP if requested
     const images = options.extractImages !== false ? 
       await extractHwpxImages(zip, imageExtractor) : [];
     
-    // Convert OWPML structure to markdown
-    const markdown = convertOwpmlToMarkdown(parsedXml);
+    const markdown = allContent.trim() || '*No readable content found in HWPX file*';
     
     return {
       markdown,
@@ -280,7 +358,7 @@ function extractTextFromViewer(container: Element): string[] {
       });
       
       if (paragraphs.length > 0) break; // Use first successful selector
-    } catch (error) {
+    } catch {
       continue; // Try next selector
     }
   }
@@ -334,13 +412,13 @@ async function extractHwpImages(
               size: imageBuffer.length
             });
           }
-        } catch (error) {
-          console.warn(`Failed to process embedded image ${index + 1}:`, error);
+        } catch (e) {
+          console.warn(`Failed to process embedded image ${index + 1}:`, e);
         }
       }
     });
-  } catch (error) {
-    console.warn('Failed to extract images from HWP:', error);
+  } catch (e) {
+    console.warn('Failed to extract images from HWP:', e);
   }
   
   return images;
@@ -356,7 +434,7 @@ async function extractHwpxImages(
   const images: ImageData[] = [];
   
   try {
-    // Look for image files in the ZIP archive
+    // Look for image files in the ZIP archive - typically in BinData folder
     const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'];
     
     for (const [fileName, file] of Object.entries(zip.files)) {
@@ -364,27 +442,29 @@ async function extractHwpxImages(
         try {
           const imageBuffer = await file.async('nodebuffer');
           const extension = path.extname(fileName).slice(1).toLowerCase();
-          const baseName = path.basename(fileName, path.extname(fileName));
-          const savedFileName = `${baseName}.${extension}`;
-          const savedPath = path.join(imageExtractor.imageDirectory, savedFileName);
           
-          // Save image using imageExtractor
-          await imageExtractor.saveImage(imageBuffer, fileName);
+          // Actually save the image to disk using imageExtractor
+          // Pass originalPath and basePath (empty string for base)
+          const savedPath = await imageExtractor.saveImage(imageBuffer, fileName, '');
           
-          images.push({
-            originalPath: fileName,
-            savedPath,
-            format: extension,
-            size: imageBuffer.length
-          });
+          if (savedPath) {
+            images.push({
+              originalPath: fileName,
+              savedPath,
+              format: extension,
+              size: imageBuffer.length
+            });
+            
+            console.log(`Extracted and saved image: ${fileName} -> ${savedPath}`);
+          }
           
-        } catch (error) {
-          console.warn(`Failed to extract image ${fileName}:`, error);
+        } catch (e) {
+          console.warn(`Failed to extract image ${fileName}:`, e);
         }
       }
     }
-  } catch (error) {
-    console.warn('Failed to extract images from HWPX:', error);
+  } catch (e) {
+    console.warn('Failed to extract images from HWPX:', e);
   }
   
   return images;
@@ -425,30 +505,30 @@ function convertHwpContentToMarkdown(textContent: string[]): string {
 /**
  * Convert OWPML structure to markdown
  */
-function convertOwpmlToMarkdown(owpmlData: any): string {
+function convertOwpmlToMarkdown(owpmlData: unknown): string {
   let markdown = '';
   
   try {
-    // Navigate OWPML structure (HWPX uses OWPML - Office Word Processor Markup Language)
-    const root = owpmlData.OWPML || owpmlData.owpml || owpmlData;
+    // HWPX uses hp:p for paragraphs and hp:t for text
+    // Navigate the structure to find text nodes
+    const texts: string[] = [];
     
-    if (root.body || root.Body) {
-      const body = root.body || root.Body;
-      markdown = processOwpmlBody(body);
-    } else if (root.BODY) {
-      const body = root.BODY;
-      markdown = processOwpmlBody(body);
-    } else {
-      // Try to extract any text content from the parsed XML
-      markdown = extractTextFromObject(root);
+    // Extract all text content recursively, but only from text nodes
+    extractTextNodes(owpmlData, texts);
+    
+    // Join extracted texts with proper spacing
+    if (texts.length > 0) {
+      markdown = texts
+        .filter(text => text.trim().length > 0)
+        .join('\n\n');
     }
     
     if (!markdown.trim()) {
       markdown = '*No readable content found in HWPX file*';
     }
     
-  } catch (error) {
-    console.warn('Error processing OWPML structure:', error);
+  } catch (e) {
+    console.warn('Error processing OWPML structure:', e);
     markdown = '*Error processing HWPX content*';
   }
   
@@ -456,155 +536,152 @@ function convertOwpmlToMarkdown(owpmlData: any): string {
 }
 
 /**
- * Process OWPML body content
+ * Extract text nodes from OWPML structure
  */
-function processOwpmlBody(body: any): string {
-  let result = '';
+function extractTextNodes(obj: unknown, texts: string[]): void {
+  if (!obj) return;
   
-  try {
-    // Process sections
-    if (body.section || body.Section || body.SECTION) {
-      const sections = body.section || body.Section || body.SECTION;
-      const sectionArray = Array.isArray(sections) ? sections : [sections];
-      
-      sectionArray.forEach((section: any) => {
-        result += processOwpmlSection(section);
-      });
-    }
-    
-    // Process paragraphs directly in body
-    if (body.p || body.P || body.PARA) {
-      const paragraphs = body.p || body.P || body.PARA;
-      const paraArray = Array.isArray(paragraphs) ? paragraphs : [paragraphs];
-      
-      paraArray.forEach((para: any) => {
-        result += processOwpmlParagraph(para);
-      });
-    }
-    
-    // Fallback: extract any text
-    if (!result.trim()) {
-      result = extractTextFromObject(body);
-    }
-    
-  } catch (error) {
-    console.warn('Error processing OWPML body:', error);
-  }
-  
-  return result;
-}
-
-/**
- * Process OWPML section
- */
-function processOwpmlSection(section: any): string {
-  let result = '';
-  
-  try {
-    if (section.p || section.P || section.PARA) {
-      const paragraphs = section.p || section.P || section.PARA;
-      const paraArray = Array.isArray(paragraphs) ? paragraphs : [paragraphs];
-      
-      paraArray.forEach((para: any) => {
-        result += processOwpmlParagraph(para);
-      });
-    } else {
-      result = extractTextFromObject(section);
-    }
-  } catch (error) {
-    console.warn('Error processing OWPML section:', error);
-  }
-  
-  return result;
-}
-
-/**
- * Process OWPML paragraph
- */
-function processOwpmlParagraph(para: any): string {
-  let result = '';
-  
-  try {
-    // Handle text content
-    if (para['#text']) {
-      result = para['#text'].toString().trim() + '\n\n';
-    }
-    
-    // Handle runs/text runs
-    if (para.run || para.RUN || para.r || para.R) {
-      const runs = para.run || para.RUN || para.r || para.R;
-      const runArray = Array.isArray(runs) ? runs : [runs];
-      
-      let paraText = '';
-      runArray.forEach((run: any) => {
-        if (run['#text']) {
-          paraText += run['#text'].toString();
-        } else if (run.t || run.T) {
-          const textElements = run.t || run.T;
-          const textArray = Array.isArray(textElements) ? textElements : [textElements];
-          textArray.forEach((textEl: any) => {
-            if (textEl['#text']) {
-              paraText += textEl['#text'].toString();
-            } else if (typeof textEl === 'string') {
-              paraText += textEl;
-            }
-          });
-        }
-      });
-      
-      if (paraText.trim()) {
-        result = paraText.trim() + '\n\n';
-      }
-    }
-    
-    // Fallback: extract any text from the paragraph
-    if (!result.trim()) {
-      result = extractTextFromObject(para);
-      if (result.trim()) {
-        result += '\n\n';
-      }
-    }
-    
-  } catch (error) {
-    console.warn('Error processing OWPML paragraph:', error);
-  }
-  
-  return result;
-}
-
-/**
- * Extract text from any object recursively
- */
-function extractTextFromObject(obj: any): string {
+  // If it's a string and looks like actual text (not XML attribute values)
   if (typeof obj === 'string') {
-    return obj;
-  }
-  
-  if (typeof obj === 'number') {
-    return obj.toString();
-  }
-  
-  if (Array.isArray(obj)) {
-    return obj.map(item => extractTextFromObject(item)).join(' ');
-  }
-  
-  if (typeof obj === 'object' && obj !== null) {
-    let text = '';
-    
-    // Look for common text properties first
-    if (obj['#text']) {
-      text += obj['#text'].toString() + ' ';
+    // Filter out numeric-only strings, single words that look like attribute values
+    const trimmed = obj.trim();
+    if (trimmed && 
+        !trimmed.match(/^[0-9\s.-]+$/) && // Skip pure numbers
+        !trimmed.match(/^[A-Z_]+$/) && // Skip constants like "BOTH", "LEFT_ONLY"
+        trimmed.length > 2 && // Skip very short strings
+        !trimmed.includes('pixel') && // Skip image metadata
+        !trimmed.startsWith('그림입니다') && // Skip image placeholders
+        !trimmed.includes('원본 그림')) { // Skip image descriptions
+      texts.push(trimmed);
     }
-    
-    // Recursively extract text from all properties
-    for (const [key, value] of Object.entries(obj)) {
-      if (key !== '#text' && key !== '@_') { // Skip attributes
-        text += extractTextFromObject(value) + ' ';
+    return;
+  }
+  
+  // If it's an array, process each item
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      extractTextNodes(item, texts);
+    }
+    return;
+  }
+  
+  // If it's an object, look for text content
+  if (typeof obj === 'object' && obj !== null) {
+    // HWPX specific text node handling
+    // Look for hp:p (paragraphs) and hp:t (text) nodes
+    if ((obj as { 'hp:p'?: unknown })['hp:p']) {
+      const paragraphs = Array.isArray((obj as { 'hp:p': unknown })['hp:p']) ? (obj as { 'hp:p': unknown[] })['hp:p'] : [(obj as { 'hp:p': unknown })['hp:p']];
+      for (const para of paragraphs) {
+        extractParagraphText(para, texts);
       }
     }
     
-    return text.trim();
+    // Also check for plain p nodes
+    if ((obj as { p?: unknown }).p) {
+      const paragraphs = Array.isArray((obj as { p: unknown }).p) ? (obj as { p: unknown[] }).p : [(obj as { p: unknown }).p];
+      for (const para of paragraphs) {
+        extractParagraphText(para, texts);
+      }
+    }
+    
+    // Check for TEXT nodes
+    if ((obj as { TEXT?: unknown }).TEXT) {
+      const textNodes = Array.isArray((obj as { TEXT: unknown }).TEXT) ? (obj as { TEXT: unknown[] }).TEXT : [(obj as { TEXT: unknown }).TEXT];
+      for (const textNode of textNodes) {
+        if ((textNode as { '#text'?: string })['#text']) {
+          const text = (textNode as { '#text': string })['#text'].trim();
+          if (text && !isMetadata(text)) {
+            texts.push(text);
+          }
+        }
+      }
+    }
+    
+    // Recursively process all properties
+    for (const [key, value] of Object.entries(obj)) {
+      // Skip attribute keys and known metadata keys
+      if (!key.startsWith('@_') && 
+          !key.startsWith('_') &&
+          key !== 'SECDEF' &&
+          key !== 'DOCSUMMARY' &&
+          key !== 'MAPPINGTABLE' &&
+          key !== 'COMPATIBLE_DOCUMENT' &&
+          key !== 'LAYOUTCOMPATIBILITY') {
+        extractTextNodes(value, texts);
+      }
+    }
+  }
+}
+
+/**
+ * Extract text from a paragraph node
+ */
+function extractParagraphText(para: unknown, texts: string[]): void {
+  if (!para) return;
+  
+  // Look for hp:run or run nodes
+  const runs = (para as { 'hp:run'?: unknown, run?: unknown, RUN?: unknown })['hp:run'] || (para as { run?: unknown })['run'] || (para as { RUN?: unknown })['RUN'];
+  if (runs) {
+    const runArray = Array.isArray(runs) ? runs : [runs];
+    for (const run of runArray) {
+      // Look for hp:t or t nodes (text content)
+      const textNode = (run as { 'hp:t'?: unknown, t?: unknown, T?: unknown, '#text'?: unknown })['hp:t'] || (run as { t?: unknown })['t'] || (run as { T?: unknown })['T'] || (run as { '#text'?: unknown })['#text'];
+      if (textNode) {
+        if (typeof textNode === 'string') {
+          const text = textNode.trim();
+          if (text && !isMetadata(text)) {
+            texts.push(text);
+          }
+        } else if ((textNode as { '#text'?: string })['#text']) {
+          const text = (textNode as { '#text': string })['#text'].trim();
+          if (text && !isMetadata(text)) {
+            texts.push(text);
+          }
+        }
+      }
+    }
   }
   
-  return '';
+  // Also check for direct text content
+  if ((para as { '#text'?: string })['#text']) {
+    const text = (para as { '#text': string })['#text'].trim();
+    if (text && !isMetadata(text)) {
+      texts.push(text);
+    }
+  }
+  
+  // Check for TEXT child nodes
+  if ((para as { TEXT?: unknown }).TEXT) {
+    const textNodes = Array.isArray((para as { TEXT: unknown }).TEXT) ? (para as { TEXT: unknown[] }).TEXT : [(para as { TEXT: unknown }).TEXT];
+    for (const textNode of textNodes) {
+      if ((textNode as { '#text'?: string })['#text']) {
+        const text = (textNode as { '#text': string })['#text'].trim();
+        if (text && !isMetadata(text)) {
+          texts.push(text);
+        }
+      } else if (typeof textNode === 'string') {
+        const text = textNode.trim();
+        if (text && !isMetadata(text)) {
+          texts.push(text);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Check if a string looks like metadata rather than document content
+ */
+function isMetadata(text: string): boolean {
+  // Filter out common metadata patterns
+  return text.match(/^[A-Z_]+$/) !== null || // Constants
+         text.match(/^[0-9\s.-]+$/) !== null || // Pure numbers
+         text.includes('pixel') || // Image metadata
+         text.startsWith('그림입니다') || // Korean "This is an image"
+         text.includes('원본 그림') || // Korean "Original image"
+         text.includes('.jpg') || // File names
+         text.includes('.png') ||
+         text.includes('.bmp') ||
+         text.includes('http://') || // URLs in metadata
+         text.length < 3; // Very short strings
 }
