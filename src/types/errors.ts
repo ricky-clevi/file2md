@@ -22,7 +22,7 @@ export abstract class ConversionError extends Error {
  * Thrown when a file format is not supported
  */
 export class UnsupportedFormatError extends ConversionError {
-  constructor(mimeType: string, supportedFormats: readonly string[] = ['PDF', 'DOCX', 'XLSX', 'PPTX']) {
+  constructor(mimeType: string, supportedFormats: readonly string[] = ['PDF', 'DOCX', 'XLSX', 'PPTX', 'HWP', 'HWPX']) {
     super(
       `Unsupported file type: ${mimeType}. Supported formats: ${supportedFormats.join(', ')}`,
       'UNSUPPORTED_FORMAT'

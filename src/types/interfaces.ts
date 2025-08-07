@@ -243,7 +243,9 @@ export const SUPPORTED_MIME_TYPES = {
   PDF: 'application/pdf',
   DOCX: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   XLSX: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  PPTX: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  PPTX: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  HWP: 'application/x-hwp',
+  HWPX: 'application/x-hwpx'
 } as const;
 
 export type SupportedMimeType = typeof SUPPORTED_MIME_TYPES[keyof typeof SUPPORTED_MIME_TYPES];

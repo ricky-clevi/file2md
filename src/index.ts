@@ -8,6 +8,7 @@ import { parsePdf } from './parsers/pdf-parser.js';
 import { parseDocx } from './parsers/docx-parser.js';
 import { parseXlsx } from './parsers/xlsx-parser.js';
 import { parsePptx } from './parsers/pptx-parser.js';
+import { parseHwp } from './parsers/hwp-parser.js';
 
 import type {
   ConvertInput,
@@ -25,7 +26,34 @@ import {
 } from './types/index.js';
 
 /**
- * Convert a document (PDF, DOCX, XLSX, PPTX) to Markdown format
+ * Detect HWP format based on file signature
+ */
+function detectHwpFormat(buffer: Buffer): 'hwp' | 'hwpx' | 'unknown' {
+  if (buffer.length < 4) {
+    return 'unknown';
+  }
+
+  // Check for CFB/OLE2 signature (HWP binary format)
+  if (buffer.length >= 8) {
+    const cfbSignature = buffer.subarray(0, 8);
+    const expectedCfb = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+    if (cfbSignature.equals(expectedCfb)) {
+      return 'hwp';
+    }
+  }
+  
+  // Check for ZIP signature (HWPX format)
+  const zipSignature = buffer.subarray(0, 4);
+  const expectedZip = Buffer.from([0x50, 0x4B, 0x03, 0x04]);
+  if (zipSignature.equals(expectedZip)) {
+    return 'hwpx';
+  }
+  
+  return 'unknown';
+}
+
+/**
+ * Convert a document (PDF, DOCX, XLSX, PPTX, HWP, HWPX) to Markdown format
  * 
  * @param input - File path (string) or Buffer containing the document data
  * @param options - Conversion options
@@ -73,10 +101,19 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
     }
 
     // Detect file type
-    const detectedType = await fileType.fromBuffer(buffer);
+    let detectedType = await fileType.fromBuffer(buffer);
     
-    if (!detectedType) {
-      throw new UnsupportedFormatError('unknown');
+    // Enhanced HWP/HWPX detection if file-type module fails or detects CFB
+    if (!detectedType || detectedType.mime === 'application/x-cfb') {
+      const hwpFormat = detectHwpFormat(buffer);
+      if (hwpFormat === 'hwp') {
+        detectedType = { mime: 'application/x-hwp', ext: 'hwp' };
+      } else if (hwpFormat === 'hwpx') {
+        detectedType = { mime: 'application/x-hwpx', ext: 'hwpx' };
+      } else if (!detectedType) {
+        throw new UnsupportedFormatError('unknown');
+      }
+      // If it's CFB but not HWP, let it continue with the original detection
     }
 
     // Validate supported format
@@ -143,6 +180,21 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         images = result.images || [];
         charts = result.charts || [];
         pageCount = result.slideCount || 1;
+        additionalMetadata = result.metadata || {};
+        break;
+      }
+      
+      case SUPPORTED_MIME_TYPES.HWP:
+      case SUPPORTED_MIME_TYPES.HWPX: {
+        const result = await parseHwp(buffer, imageExtractor, chartExtractor, {
+          preserveLayout,
+          extractImages,
+          extractCharts
+        });
+        markdown = result.markdown;
+        images = result.images || [];
+        charts = result.charts || [];
+        pageCount = 1; // Single document
         additionalMetadata = result.metadata || {};
         break;
       }

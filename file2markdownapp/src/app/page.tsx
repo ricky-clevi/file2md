@@ -31,7 +31,10 @@ export default function Home() {
       'application/pdf': ['.pdf'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx']
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+      'application/x-hwp': ['.hwp'],
+      'application/x-hwpx': ['.hwpx'],
+      'application/x-cfb': ['.hwp'] // CFB files with .hwp extension
     },
     multiple: false,
     maxSize: 50 * 1024 * 1024 // 50MB limit
@@ -102,7 +105,7 @@ export default function Home() {
             File to Markdown Converter
           </h1>
           <p className="text-lg text-gray-600">
-            Convert PDF, DOCX, XLSX, and PPTX files to Markdown format
+            Convert PDF, DOCX, XLSX, PPTX, HWP, and HWPX files to Markdown format
           </p>
         </div>
 
@@ -148,7 +151,7 @@ export default function Home() {
                           : 'Drag & drop a file here, or click to select'}
                       </p>
                       <p className="text-sm text-gray-400 mt-2">
-                        Supports PDF, DOCX, XLSX, PPTX (max 50MB)
+                        Supports PDF, DOCX, XLSX, PPTX, HWP, HWPX (max 50MB)
                       </p>
                     </div>
                   )}
@@ -261,12 +264,14 @@ export default function Home() {
         {/* Supported Formats Info */}
         <div className="mt-8 bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Supported Formats</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {[
               { name: 'PDF', desc: 'Portable Document Format', icon: '📄' },
               { name: 'DOCX', desc: 'Microsoft Word Document', icon: '📝' },
               { name: 'XLSX', desc: 'Microsoft Excel Spreadsheet', icon: '📊' },
-              { name: 'PPTX', desc: 'Microsoft PowerPoint Presentation', icon: '📽️' }
+              { name: 'PPTX', desc: 'Microsoft PowerPoint Presentation', icon: '📽️' },
+              { name: 'HWP', desc: 'Hangul Word Processor', icon: '🇰🇷' },
+              { name: 'HWPX', desc: 'Hangul Word Processor XML', icon: '📋' }
             ].map(format => (
               <div key={format.name} className="text-center p-3 border rounded-lg">
                 <div className="text-2xl mb-2">{format.icon}</div>

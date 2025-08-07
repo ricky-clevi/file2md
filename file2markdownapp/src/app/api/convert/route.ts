@@ -28,8 +28,12 @@ export async function POST(request: NextRequest) {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/x-hwp',
+      'application/x-hwpx',
+      'application/x-cfb', // CFB files might be HWP files
+      'application/zip', // ZIP files might be HWPX files
     ];
-    const allowedExts = ['.pdf', '.docx', '.pptx', '.xlsx'];
+    const allowedExts = ['.pdf', '.docx', '.pptx', '.xlsx', '.hwp', '.hwpx'];
 
     // 50MB limit
     const MAX_SIZE = 50 * 1024 * 1024;
