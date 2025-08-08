@@ -24,3 +24,10 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Minimal prose styling for markdown preview */
+.prose h1, .prose h2, .prose h3 { font-weight: 700; margin-top: 1rem; }
+.prose p { margin: 0.5rem 0; line-height: 1.6; }
+.prose code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }
+.prose pre { background: #111827; color: #e5e7eb; padding: 0.75rem; border-radius: 0.5rem; overflow: auto; }
+.prose a { color: #2563eb; text-decoration: underline; }

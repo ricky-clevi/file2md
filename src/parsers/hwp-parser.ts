@@ -28,6 +28,118 @@ export interface HwpParseResult {
 
 type HwpFormat = 'hwp' | 'hwpx' | 'unknown';
 
+type RelationshipMap = Record<string, string>;
+
+/**
+ * Build a relationship map for HWPX content files (rId -> target zip path)
+ * HWPX follows OPC; relationships are stored alongside content files:
+ *   Contents/section0.xml  ->  Contents/_rels/section0.xml.rels
+ */
+async function buildRelationshipMap(zip: JSZip, contentFileNames: readonly string[]): Promise<RelationshipMap> {
+  const relMap: RelationshipMap = {};
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', trimValues: true });
+
+  for (const contentFileName of contentFileNames) {
+    try {
+      const dir = path.posix.dirname(contentFileName);
+      const base = path.posix.basename(contentFileName);
+    const relsPath = path.posix.join(dir, '_rels', `${base}.rels`);
+      const relsFile = zip.file(relsPath);
+      if (!relsFile) continue;
+
+      const relsXml = await relsFile.async('string');
+      const rels = parser.parse(relsXml) as unknown as {
+        Relationships?: { Relationship?: unknown };
+      };
+
+      const relationships = (rels?.Relationships as { Relationship?: unknown })?.Relationship;
+      if (!relationships) continue;
+
+      const relArray = Array.isArray(relationships) ? relationships : [relationships];
+      for (const rel of relArray) {
+        const relObj = rel as Record<string, unknown>;
+        const id = (relObj['@_Id'] as string) || (relObj['@_ID'] as string);
+        const targetRaw = (relObj['@_Target'] as string) || (relObj['@_HRef'] as string);
+        if (!id || !targetRaw) continue;
+
+        // Normalize target to a POSIX zip path and try to resolve to an existing entry
+        const tryCandidates: string[] = [];
+        let target = targetRaw.replace(/\\/g, '/');
+        if (target.startsWith('/')) {
+          target = target.slice(1); // remove leading slash
+        }
+        // Candidate 1: resolve relative to the content file directory
+        tryCandidates.push(path.posix.normalize(path.posix.join(dir, target)));
+        // Candidate 2: as-is normalized (some rels already relative to root)
+        tryCandidates.push(path.posix.normalize(target));
+        // Candidate 3: strip common prefixes (e.g., Contents/)
+        if (target.includes('BinData/')) {
+          const tail = target.split('BinData/').pop();
+          tryCandidates.push(`BinData/${tail}`);
+        }
+
+        const resolvedExisting = tryCandidates.find(c => !!zip.file(c));
+        // Store with r:id as key (common in content)
+        relMap[id] = resolvedExisting || tryCandidates[0];
+        // Also store with potential 'r:id' prefix to increase hit rate in matching
+        relMap[`r:${id}`] = relMap[id];
+      }
+    } catch (e) {
+      console.warn('Failed to parse relationship file for', contentFileName, e);
+    }
+  }
+
+  return relMap;
+}
+
+/**
+ * Augment relationship map using HWPX content manifest (Contents/content.hpf)
+ * This file often maps binItem ids to actual BinData/* targets.
+ */
+async function augmentRelationshipMapWithContentHpf(zip: JSZip, relMap: RelationshipMap): Promise<RelationshipMap> {
+  const contentHpf = zip.file('Contents/content.hpf');
+  if (!contentHpf) return relMap;
+
+  try {
+    const xml = await contentHpf.async('string');
+    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', trimValues: true });
+    const parsed = parser.parse(xml) as unknown as Record<string, unknown>;
+
+    const idToTarget: RelationshipMap = { ...relMap };
+
+    const visit = (node: unknown, depth: number = 0) => {
+      if (!node || depth > 8) return;
+      if (typeof node === 'object') {
+        const obj = node as Record<string, unknown>;
+        const id = (obj['@_id'] as string) || (obj['@_ID'] as string) || (obj['@_itemID'] as string) || (obj['@_binItem'] as string);
+        const href = (obj['@_Target'] as string) || (obj['@_HRef'] as string) || (obj['@_href'] as string) || (obj['@_path'] as string) || (obj['@_src'] as string);
+        if (id && href && /BinData\//i.test(String(href))) {
+          let target = String(href).replace(/\\/g, '/');
+          if (target.startsWith('/')) target = target.slice(1);
+          // Prefer explicit BinData prefix
+          if (!target.includes('BinData/')) {
+            const tail = target.split('BinData/').pop();
+            if (tail) target = `BinData/${tail}`;
+          }
+          idToTarget[id] = path.posix.normalize(target);
+        }
+
+        for (const value of Object.values(obj)) {
+          visit(value, depth + 1);
+        }
+      } else if (Array.isArray(node)) {
+        for (const item of node) visit(item, depth + 1);
+      }
+    };
+
+    visit(parsed, 0);
+    return idToTarget;
+  } catch (e) {
+    console.warn('Failed to parse content.hpf for binItem mapping:', e);
+    return relMap;
+  }
+}
+
 /**
  * Parse HWP or HWPX buffer and convert to markdown
  */
@@ -265,6 +377,15 @@ async function parseHwpxXml(
       throw new ParseError('HWPX', `No content XML file found in HWPX archive. Files found: ${fileList}${moreFiles}`);
     }
     
+    // Extract images from ZIP if requested (do this before parsing to pass images to parser)
+    const images = options.extractImages !== false ? 
+      await extractHwpxImages(zip, imageExtractor) : [];
+
+    // Build relationships map for all content files we will parse
+    const relContentFiles = sectionFiles.length > 0 ? sectionFiles.sort() : [contentFileName];
+    let relationshipMap = await buildRelationshipMap(zip, relContentFiles);
+    relationshipMap = await augmentRelationshipMapWithContentHpf(zip, relationshipMap);
+    
     // Parse all section files if multiple exist
     let allContent = '';
     
@@ -286,7 +407,7 @@ async function parseHwpxXml(
           console.log(`Parsed HWPX section: ${sectionFileName}`);
           
           // Convert each section to markdown and combine
-          const sectionMarkdown = convertOwpmlToMarkdown(parsedXml);
+          const sectionMarkdown = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
           if (sectionMarkdown && sectionMarkdown.trim()) {
             allContent += `${sectionMarkdown}\n\n`;
           }
@@ -305,12 +426,8 @@ async function parseHwpxXml(
       
       const parsedXml = parser.parse(xmlContent);
       console.log(`Parsed HWPX XML from ${contentFileName}`);
-      allContent = convertOwpmlToMarkdown(parsedXml);
+      allContent = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
     }
-    
-    // Extract images from ZIP if requested
-    const images = options.extractImages !== false ? 
-      await extractHwpxImages(zip, imageExtractor) : [];
     
     const markdown = allContent.trim() || '*No readable content found in HWPX file*';
     
@@ -505,22 +622,34 @@ function convertHwpContentToMarkdown(textContent: string[]): string {
 /**
  * Convert OWPML structure to markdown
  */
-function convertOwpmlToMarkdown(owpmlData: unknown): string {
+function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[] = [], relationshipMap: RelationshipMap = {}): string {
   let markdown = '';
   
   try {
     // HWPX uses hp:p for paragraphs and hp:t for text
-    // Navigate the structure to find text nodes
-    const texts: string[] = [];
+    // Navigate the structure to find text nodes and image references
+    const contentItems: {type: 'text' | 'image', content: string, position: number}[] = [];
+    const positionCounter = { value: 0 };
     
-    // Extract all text content recursively, but only from text nodes
-    extractTextNodes(owpmlData, texts);
+    // Extract all text content and image references recursively
+    extractContentNodes(owpmlData, contentItems, positionCounter, images, relationshipMap);
     
-    // Join extracted texts with proper spacing
-    if (texts.length > 0) {
-      markdown = texts
-        .filter(text => text.trim().length > 0)
-        .join('\n\n');
+    // Sort by position to maintain document order
+    contentItems.sort((a, b) => a.position - b.position);
+    
+    // Build markdown with text and image references
+    if (contentItems.length > 0) {
+      const markdownParts: string[] = [];
+      
+      for (const item of contentItems) {
+        if (item.type === 'text' && item.content.trim().length > 0) {
+          markdownParts.push(item.content);
+        } else if (item.type === 'image' && item.content.trim().length > 0) {
+          markdownParts.push(item.content);
+        }
+      }
+      
+      markdown = markdownParts.join('\n\n');
     }
     
     if (!markdown.trim()) {
@@ -536,9 +665,15 @@ function convertOwpmlToMarkdown(owpmlData: unknown): string {
 }
 
 /**
- * Extract text nodes from OWPML structure
+ * Extract content nodes (text and images) from OWPML structure
  */
-function extractTextNodes(obj: unknown, texts: string[]): void {
+function extractContentNodes(
+  obj: unknown,
+  contentItems: {type: 'text' | 'image', content: string, position: number}[],
+  positionCounter: {value: number},
+  images: readonly ImageData[],
+  relationshipMap: RelationshipMap
+): void {
   if (!obj) return;
   
   // If it's a string and looks like actual text (not XML attribute values)
@@ -552,7 +687,11 @@ function extractTextNodes(obj: unknown, texts: string[]): void {
         !trimmed.includes('pixel') && // Skip image metadata
         !trimmed.startsWith('그림입니다') && // Skip image placeholders
         !trimmed.includes('원본 그림')) { // Skip image descriptions
-      texts.push(trimmed);
+      contentItems.push({
+        type: 'text',
+        content: trimmed,
+        position: positionCounter.value++
+      });
     }
     return;
   }
@@ -560,19 +699,34 @@ function extractTextNodes(obj: unknown, texts: string[]): void {
   // If it's an array, process each item
   if (Array.isArray(obj)) {
     for (const item of obj) {
-      extractTextNodes(item, texts);
+      extractContentNodes(item, contentItems, positionCounter, images, relationshipMap);
     }
     return;
   }
   
-  // If it's an object, look for text content
+  // If it's an object, look for content
   if (typeof obj === 'object' && obj !== null) {
+    // Check for image/drawing references in HWPX
+    // HWPX can have hp:pic, PICTURE, IMAGE, or drawing objects
+    if ((obj as Record<string, unknown>)['hp:pic'] || (obj as Record<string, unknown>)['PICTURE'] || (obj as Record<string, unknown>)['IMAGE'] || 
+        (obj as Record<string, unknown>)['hp:draw'] || (obj as Record<string, unknown>)['DRAWING']) {
+      // Try to find a matching image and insert reference
+      const imageRef = findImageReference(obj, images, relationshipMap);
+      if (imageRef) {
+        contentItems.push({
+          type: 'image',
+          content: imageRef,
+          position: positionCounter.value++
+        });
+      }
+    }
+    
     // HWPX specific text node handling
     // Look for hp:p (paragraphs) and hp:t (text) nodes
     if ((obj as { 'hp:p'?: unknown })['hp:p']) {
       const paragraphs = Array.isArray((obj as { 'hp:p': unknown })['hp:p']) ? (obj as { 'hp:p': unknown[] })['hp:p'] : [(obj as { 'hp:p': unknown })['hp:p']];
       for (const para of paragraphs) {
-        extractParagraphText(para, texts);
+        extractParagraphContent(para, contentItems, positionCounter, images, relationshipMap);
       }
     }
     
@@ -580,7 +734,7 @@ function extractTextNodes(obj: unknown, texts: string[]): void {
     if ((obj as { p?: unknown }).p) {
       const paragraphs = Array.isArray((obj as { p: unknown }).p) ? (obj as { p: unknown[] }).p : [(obj as { p: unknown }).p];
       for (const para of paragraphs) {
-        extractParagraphText(para, texts);
+        extractParagraphContent(para, contentItems, positionCounter, images, relationshipMap);
       }
     }
     
@@ -591,7 +745,11 @@ function extractTextNodes(obj: unknown, texts: string[]): void {
         if ((textNode as { '#text'?: string })['#text']) {
           const text = (textNode as { '#text': string })['#text'].trim();
           if (text && !isMetadata(text)) {
-            texts.push(text);
+            contentItems.push({
+              type: 'text',
+              content: text,
+              position: positionCounter.value++
+            });
           }
         }
       }
@@ -607,16 +765,178 @@ function extractTextNodes(obj: unknown, texts: string[]): void {
           key !== 'MAPPINGTABLE' &&
           key !== 'COMPATIBLE_DOCUMENT' &&
           key !== 'LAYOUTCOMPATIBILITY') {
-        extractTextNodes(value, texts);
+        extractContentNodes(value, contentItems, positionCounter, images, relationshipMap);
       }
     }
   }
 }
 
 /**
- * Extract text from a paragraph node
+ * Find image reference based on drawing/picture object
  */
-function extractParagraphText(para: unknown, texts: string[]): void {
+function findImageReference(
+  drawingObj: unknown,
+  images: readonly ImageData[],
+  relationshipMap: RelationshipMap
+): string | null {
+  if (!images || images.length === 0) return null;
+  
+  try {
+    // Try to find an image ID or reference in the drawing object
+    const obj = drawingObj as Record<string, unknown>;
+    
+    // Look for common image reference patterns
+    let imageId: string | null = null;
+    
+    // Helper: recursively search for an image relationship id within the drawing object
+    const findRidDeep = (o: unknown, depth: number = 0): string | null => {
+      if (!o || depth > 4) return null;
+      if (typeof o !== 'object') return null;
+      const r = o as Record<string, unknown>;
+      const directId = (r['@_id'] as string) || (r['@_refId'] as string) || (r['@_href'] as string) ||
+                       (r['@_r:id'] as string) || (r['@_rId'] as string) || (r['@_rid'] as string) ||
+                       (r['refId'] as string) || (r['r:id'] as string);
+      if (directId) return directId;
+      for (const v of Object.values(r)) {
+        const nested = findRidDeep(v, depth + 1);
+        if (nested) return nested;
+      }
+      return null;
+    };
+
+    imageId = findRidDeep(obj);
+    
+    // If we found an ID, try to match it with our extracted images
+    if (imageId) {
+      // Resolve via relationships first (rId -> target path inside zip)
+      // Normalize id to check variants (with/without r:)
+      const variants = [imageId, imageId.startsWith('r:') ? imageId.slice(2) : `r:${imageId}`];
+      const targetPath = variants.map(v => relationshipMap[v]).find(Boolean) as string | undefined;
+      let matchingImage: ImageData | undefined;
+      if (targetPath) {
+        matchingImage = images.find(img => img.originalPath.replace(/\\/g, '/').toLowerCase() === targetPath.toLowerCase());
+        // Also try endsWith for safety if some paths differ in prefixes
+        if (!matchingImage) {
+          matchingImage = images.find(img => targetPath.toLowerCase().endsWith(img.originalPath.replace(/\\/g, '/').toLowerCase()) || img.originalPath.replace(/\\/g, '/').toLowerCase().endsWith(targetPath.toLowerCase()));
+        }
+      }
+      // Fallback to substring match
+      if (!matchingImage) {
+        matchingImage = images.find(img => img.originalPath.includes(imageId as string) || img.savedPath.includes(imageId as string));
+      }
+      if (matchingImage) {
+        const imageName = path.basename(matchingImage.savedPath);
+        const markdownRef = `![Image](images/${imageName})`;
+        console.log(`[DEBUG] Found matching image: ${markdownRef} (originalPath: ${matchingImage.originalPath}, savedPath: ${matchingImage.savedPath})`);
+        return markdownRef;
+      }
+    }
+
+    // If no rId path, look for direct BinData references OR binItem id links
+    const findDirectImageTarget = (o: unknown, depth: number = 0): string | null => {
+      if (!o || depth > 6) return null;
+      if (typeof o === 'string') {
+        const s = o.trim();
+        const m = s.match(/BinData\/[\w.-]+\.(png|jpg|jpeg|gif|bmp|tiff)/i);
+        if (m) return m[0];
+        return null;
+      }
+      if (typeof o === 'object') {
+        const r = o as Record<string, unknown>;
+        // Check common attributes
+        const candidates = [r['@_Target'], r['@_HRef'], r['@_src'], r['@_href'], r['@_path'], r['@_file']];
+        for (const c of candidates) {
+          const found = findDirectImageTarget(c, depth + 1);
+          if (found) return found;
+        }
+        // If binItem id present, map via relationshipMap as a second step
+        const binId = (r['@_binItemRef'] as string) || (r['@_binItem'] as string) || (r['@_idref'] as string) || (r['@_idRef'] as string);
+        if (binId && relationshipMap[binId]) {
+          return relationshipMap[binId];
+        }
+        for (const v of Object.values(r)) {
+          const found = findDirectImageTarget(v, depth + 1);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const directTarget = findDirectImageTarget(obj);
+    if (directTarget) {
+      const targetLc = directTarget.replace(/\\/g, '/').toLowerCase();
+      const matchingImage = images.find(img => {
+        const origLc = img.originalPath.replace(/\\/g, '/').toLowerCase();
+        return origLc === targetLc || origLc.endsWith(targetLc) || targetLc.endsWith(origLc);
+      });
+      if (matchingImage) {
+        const imageName = path.basename(matchingImage.savedPath);
+        const markdownRef = `![Image](images/${imageName})`;
+        console.log(`[DEBUG] Found direct target match: ${markdownRef} (originalPath: ${matchingImage.originalPath}, savedPath: ${matchingImage.savedPath})`);
+        return markdownRef;
+      }
+    }
+    
+    // If no specific match found, but we do have extracted images, prefer inserting in sequence
+    // Track a simple cursor on the drawing object to avoid repeating the same image across all refs
+    const objRec = obj as Record<string, unknown>;
+    if (!('__imageCursor' in objRec)) {
+      objRec['__imageCursor'] = 0;
+    }
+    const cursor = Number(objRec['__imageCursor']) || 0;
+    const selected = images[cursor % images.length];
+    objRec['__imageCursor'] = cursor + 1;
+    if (selected) {
+      const imageName = path.basename(selected.savedPath);
+      const markdownRef = `![Image](images/${imageName})`;
+      console.log(`[DEBUG] Using fallback image reference: ${markdownRef} (cursor: ${cursor}, total images: ${images.length})`);
+      console.log(`[DEBUG] Selected image: originalPath=${selected.originalPath}, savedPath=${selected.savedPath}`);
+      return markdownRef;
+    }
+    console.log(`[DEBUG] No fallback image available (total images: ${images.length})`);
+    return null;
+    
+  } catch (e) {
+    console.warn('Error finding image reference:', e);
+  }
+  
+  return null;
+}
+
+/**
+ * Extract content from a paragraph node (both text and images)
+ */
+function extractParagraphContent(
+  para: unknown,
+  contentItems: {type: 'text' | 'image', content: string, position: number}[],
+  positionCounter: {value: number},
+  images: readonly ImageData[],
+  relationshipMap: RelationshipMap
+): void {
+  if (!para) return;
+  
+  // Check for images/drawings in paragraph first
+  const obj = para as Record<string, unknown>;
+  if (obj['hp:pic'] || obj['PICTURE'] || obj['IMAGE'] || obj['hp:draw'] || obj['DRAWING']) {
+    const imageRef = findImageReference(obj, images, relationshipMap);
+    if (imageRef) {
+      contentItems.push({
+        type: 'image',
+        content: imageRef,
+        position: positionCounter.value++
+      });
+    }
+  }
+  
+  // Then extract text content using the original logic
+  extractParagraphText(para, contentItems, positionCounter);
+}
+
+
+/**
+ * Extract text from a paragraph node (legacy function)
+ */
+function extractParagraphText(para: unknown, contentItems: {type: 'text' | 'image', content: string, position: number}[], positionCounter: {value: number}): void {
   if (!para) return;
   
   // Look for hp:run or run nodes
@@ -630,12 +950,20 @@ function extractParagraphText(para: unknown, texts: string[]): void {
         if (typeof textNode === 'string') {
           const text = textNode.trim();
           if (text && !isMetadata(text)) {
-            texts.push(text);
+            contentItems.push({
+              type: 'text',
+              content: text,
+              position: positionCounter.value++
+            });
           }
         } else if ((textNode as { '#text'?: string })['#text']) {
           const text = (textNode as { '#text': string })['#text'].trim();
           if (text && !isMetadata(text)) {
-            texts.push(text);
+            contentItems.push({
+              type: 'text',
+              content: text,
+              position: positionCounter.value++
+            });
           }
         }
       }
@@ -646,7 +974,11 @@ function extractParagraphText(para: unknown, texts: string[]): void {
   if ((para as { '#text'?: string })['#text']) {
     const text = (para as { '#text': string })['#text'].trim();
     if (text && !isMetadata(text)) {
-      texts.push(text);
+      contentItems.push({
+        type: 'text',
+        content: text,
+        position: positionCounter.value++
+      });
     }
   }
   
@@ -657,12 +989,20 @@ function extractParagraphText(para: unknown, texts: string[]): void {
       if ((textNode as { '#text'?: string })['#text']) {
         const text = (textNode as { '#text': string })['#text'].trim();
         if (text && !isMetadata(text)) {
-          texts.push(text);
+          contentItems.push({
+            type: 'text',
+            content: text,
+            position: positionCounter.value++
+          });
         }
       } else if (typeof textNode === 'string') {
         const text = textNode.trim();
         if (text && !isMetadata(text)) {
-          texts.push(text);
+          contentItems.push({
+            type: 'text',
+            content: text,
+            position: positionCounter.value++
+          });
         }
       }
     }

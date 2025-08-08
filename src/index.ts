@@ -106,8 +106,8 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
       if (hwpFormat !== 'unknown') {
         detectedType = {
           ...detectedType,
-          ext: hwpFormat as any,
-          mime: `application/x-${hwpFormat}` as any
+          ext: hwpFormat as fileType.FileExtension,
+          mime: `application/x-${hwpFormat}` as fileType.MimeType
         };
       } else if (!detectedType) {
         throw new UnsupportedFormatError('unknown');

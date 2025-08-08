@@ -14,6 +14,10 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
+    // Optional advanced options from client
+    const preserveLayoutFlag = (formData.get('preserveLayout') as string | null)?.toLowerCase?.() === 'true';
+    const extractImagesFlag = (formData.get('extractImages') as string | null)?.toLowerCase?.() !== 'false';
+    const extractChartsFlag = (formData.get('extractCharts') as string | null)?.toLowerCase?.() !== 'false';
 
     if (!file) {
       return NextResponse.json(
@@ -99,25 +103,26 @@ export async function POST(request: NextRequest) {
       const result = await convert(tempFilePath, {
         imageDir: imageDir,    // For legacy mode (DOCX, etc.)
         outputDir: imageDir,   // For slide screenshots (PPTX)
-        preserveLayout: true,
-        extractImages: true,
-        extractCharts: true,
+        preserveLayout: preserveLayoutFlag || true,
+        extractImages: extractImagesFlag,
+        extractCharts: extractChartsFlag,
       });
       
-      console.log('Conversion result - images found:', result.images.length);
+      console.log('[DEBUG] Conversion result - images found:', result.images.length);
       if (result.images.length > 0) {
-        console.log('First few image paths:');
+        console.log('[DEBUG] First few image paths:');
         result.images.slice(0, 3).forEach((img, i) => {
-          console.log(`  ${i + 1}: ${img.savedPath}`);
+          console.log(`[DEBUG]   ${i + 1}: savedPath=${img.savedPath}, originalPath=${img.originalPath}`);
         });
         if (result.images.length > 3) {
-          console.log(`  ... and ${result.images.length - 3} more images`);
+          console.log(`[DEBUG]   ... and ${result.images.length - 3} more images`);
         }
       }
 
       const hasImages = result.images.length > 0;
       let downloadUrl: string;
       let filename: string;
+      let previewMarkdown = result.markdown;
 
       if (hasImages) {
         // Create ZIP file with markdown and images, ensure unique filename
@@ -126,6 +131,48 @@ export async function POST(request: NextRequest) {
         
         await createZipFile(zipPath, result.markdown, originalName, [...result.images], tempFilePath, imageDir);
         downloadUrl = `/downloads/${filename}`;
+
+        // Create a public images mirror for preview: /downloads/<fileId>-images/images/*
+      try {
+        const publicImagesDir = path.join(outputDir, `${fileId}-images`, 'images');
+        await mkdir(publicImagesDir, { recursive: true });
+        console.log(`[DEBUG] Creating public images mirror at: ${publicImagesDir}`);
+        
+        for (const image of result.images) {
+          const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
+          if (!savedPath) continue;
+          const imageName = path.basename(savedPath);
+          const dest = path.join(publicImagesDir, imageName);
+          // Copy file for preview
+          await writeFile(dest, await (await import('fs/promises')).readFile(savedPath));
+          console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
+        }
+        
+        // Rewrite markdown image links for preview to point to public mirror
+        const baseUrl = `/downloads/${fileId}-images/images/`;
+        console.log(`[DEBUG] Rewriting markdown image URLs to use base: ${baseUrl}`);
+        
+        // Log original markdown image references
+        const originalImageRefs = result.markdown.match(/!\[.*?\]\(images\/[^)]+\)/g) || [];
+        console.log(`[DEBUG] Original image references found: ${originalImageRefs.length}`);
+        originalImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
+        
+        // Enhanced replacement to handle various image reference formats
+        previewMarkdown = result.markdown
+          .replace(/\]\(images\//g, `](${baseUrl}`)
+          .replace(/\]\(\.\/images\//g, `](${baseUrl}`)
+          .replace(/src="images\//g, `src="${baseUrl}`)
+          .replace(/src="\.\/images\//g, `src="${baseUrl}`);
+        
+        // Log rewritten markdown image references
+        const rewrittenImageRefs = previewMarkdown.match(/!\[.*?\]\([^)]+\)/g) || [];
+        console.log(`[DEBUG] Rewritten image references: ${rewrittenImageRefs.length}`);
+        rewrittenImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
+        
+        console.log(`[DEBUG] Updated preview markdown with ${result.images.length} image references`);
+        } catch (mirrorErr) {
+          console.warn('Failed to build public preview images mirror:', mirrorErr);
+        }
       } else {
         // Save markdown file directly, ensure unique filename
         filename = `${originalName}__${fileId}.md`;
@@ -137,11 +184,42 @@ export async function POST(request: NextRequest) {
         await cleanupTempFiles(tempFilePath, imageDir);
       }
 
+      // Build extra stats for UI
+      const inputBytes = buffer.length;
+      const markdownBytes = Buffer.byteLength(result.markdown || '', 'utf-8');
+      const stats: {
+        inputBytes: number;
+        markdownBytes: number;
+        compressionRatio: number | null;
+        imageCount: number;
+        chartCount: number;
+        processingTimeMs?: number;
+      } = {
+        inputBytes,
+        markdownBytes,
+        compressionRatio: inputBytes > 0 ? Number((markdownBytes / inputBytes).toFixed(2)) : null,
+        imageCount: result.images?.length || 0,
+        chartCount: result.charts?.length || 0,
+        processingTimeMs: ((): number | undefined => {
+          const md = result.metadata as unknown;
+          if (md && typeof md === 'object' && 'processingTime' in md) {
+            const val = (md as { processingTime?: unknown }).processingTime;
+            return typeof val === 'number' ? val : undefined;
+          }
+          return undefined;
+        })(),
+      };
+
       return NextResponse.json({
         success: true,
         filename,
         hasImages,
         downloadUrl,
+        markdown: previewMarkdown,
+        imageCount: result.images?.length || 0,
+        chartCount: result.charts?.length || 0,
+        metadata: result.metadata,
+        stats,
       });
 
     } catch (conversionError) {
@@ -177,7 +255,7 @@ async function createZipFile(
   zipPath: string, 
   markdown: string, 
   originalName: string, 
-  images: any[],
+  images: { savedPath: string }[],
   tempFilePath: string,
   imageDir: string
 ): Promise<void> {

@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ConversionResult {
   success: boolean;
@@ -9,6 +11,18 @@ interface ConversionResult {
   hasImages: boolean;
   downloadUrl: string;
   error?: string;
+  markdown?: string;
+  imageCount?: number;
+  chartCount?: number;
+  metadata?: Record<string, unknown>;
+  stats?: {
+    inputBytes?: number;
+    markdownBytes?: number;
+    compressionRatio?: number | null;
+    imageCount?: number;
+    chartCount?: number;
+    processingTimeMs?: number;
+  };
 }
 
 export default function Home() {
@@ -16,6 +30,9 @@ export default function Home() {
   const [isConverting, setIsConverting] = useState(false);
   const [result, setResult] = useState<ConversionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preserveLayout, setPreserveLayout] = useState(true);
+  const [extractImages, setExtractImages] = useState(true);
+  const [extractCharts, setExtractCharts] = useState(true);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -49,6 +66,9 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('preserveLayout', String(preserveLayout));
+    formData.append('extractImages', String(extractImages));
+    formData.append('extractCharts', String(extractCharts));
 
     try {
       const response = await fetch('/api/convert', {
@@ -91,6 +111,13 @@ export default function Home() {
     }
   };
 
+  const prettyBytes = (n?: number) => {
+    if (!n && n !== 0) return '-';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const resetForm = () => {
     setSelectedFile(null);
     setResult(null);
@@ -109,18 +136,18 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="bg-white rounded-lg shadow-lg p-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
           {!result ? (
             <>
               {/* File Upload Area */}
               <div
                 {...getRootProps()}
-                className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
                   isDragActive
-                    ? 'border-blue-400 bg-blue-50'
+                    ? 'border-blue-500 bg-blue-50 scale-[1.01]'
                     : selectedFile
-                    ? 'border-green-400 bg-green-50'
-                    : 'border-gray-300 hover:border-gray-400'
+                    ? 'border-green-500 bg-green-50'
+                    : 'border-gray-300 hover:border-gray-400 hover:shadow-md'
                 }`}
               >
                 <input {...getInputProps()} />
@@ -158,6 +185,22 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Options */}
+              <div className="grid sm:grid-cols-3 gap-4 mt-6">
+                <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
+                  <input type="checkbox" checked={preserveLayout} onChange={e => setPreserveLayout(e.target.checked)} />
+                  Preserve layout
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
+                  <input type="checkbox" checked={extractImages} onChange={e => setExtractImages(e.target.checked)} />
+                  Extract images
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
+                  <input type="checkbox" checked={extractCharts} onChange={e => setExtractCharts(e.target.checked)} />
+                  Extract charts (DOCX/PPTX)
+                </label>
+              </div>
+
               {/* Action Buttons */}
               <div className="flex justify-center space-x-4 mt-6">
                 {selectedFile && (
@@ -171,9 +214,9 @@ export default function Home() {
                 <button
                   onClick={handleConvert}
                   disabled={!selectedFile || isConverting}
-                  className={`px-8 py-2 rounded-md font-medium transition-colors ${
+                  className={`px-8 py-2 rounded-md font-medium transition-colors shadow ${
                     !selectedFile || isConverting
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none'
                       : 'bg-blue-600 text-white hover:bg-blue-700'
                   }`}
                 >
@@ -214,7 +257,7 @@ export default function Home() {
             </>
           ) : (
             /* Success Result */
-            <div className="text-center space-y-6">
+            <div className="space-y-6">
               <div className="mx-auto w-16 h-16 text-green-500">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -236,10 +279,56 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p><strong>File:</strong> {result.filename}</p>
-                  <p><strong>Format:</strong> {result.hasImages ? 'ZIP (Markdown + Images)' : 'Markdown'}</p>
+              <div className="grid lg:grid-cols-2 gap-6">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-sm text-gray-600 space-y-1">
+                    <p><strong>File:</strong> {result.filename}</p>
+                    <p><strong>Output:</strong> {result.hasImages ? 'ZIP (Markdown + Images)' : 'Markdown'}</p>
+                    <p><strong>Images:</strong> {result.imageCount ?? (result.hasImages ? 'yes' : 'no')}</p>
+                    <p><strong>Charts:</strong> {result.chartCount ?? 0}</p>
+                    {result.stats && (
+                      <>
+                        <p><strong>Input size:</strong> {prettyBytes(result.stats.inputBytes)}</p>
+                        <p><strong>Markdown size:</strong> {prettyBytes(result.stats.markdownBytes)}</p>
+                        <p><strong>Compression ratio:</strong> {result.stats.compressionRatio ?? '-'}</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-gray-900">Markdown preview</h3>
+                    <button
+                      onClick={handleDownload}
+                      className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
+                    >
+                      Download {result.hasImages ? 'ZIP' : 'Markdown'}
+                    </button>
+                  </div>
+                  <div className="prose max-w-none text-left bg-white rounded-md p-3 border max-h-[50vh] overflow-auto">
+                    <ReactMarkdown 
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                       img: ({ node, ...props }) => (
+                         <img
+                           {...props}
+                           style={{ maxWidth: '100%', height: 'auto', marginBottom: '1rem' }}
+                           onError={(e) => {
+                             console.error('[DEBUG] Failed to load image:', props.src);
+                             console.error('[DEBUG] Image alt text:', props.alt);
+                             console.error('[DEBUG] Full image props:', props);
+                             (e.target as HTMLImageElement).style.display = 'none';
+                           }}
+                           onLoad={(e) => {
+                             console.log('[DEBUG] Successfully loaded image:', props.src);
+                           }}
+                         />
+                       )
+                      }}
+                    >
+                      {result.markdown || ''}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               </div>
 

@@ -73,16 +73,24 @@ export class ImageExtractor {
     const fullPath = path.join(this.outputDir, filename);
     
     try {
+      console.log(`[DEBUG] Saving image: ${filename} (counter: ${this.imageCounter})`);
+      console.log(`[DEBUG] Original path: ${originalPath}, Base path: ${basePath}`);
+      console.log(`[DEBUG] Full output path: ${fullPath}`);
+      console.log(`[DEBUG] Image buffer size: ${buffer.length} bytes`);
+      
       fs.writeFileSync(fullPath, buffer);
       
       // Store mapping for reference lookup
       const key = basePath + originalPath;
       this.extractedImages.set(key, filename);
       
+      console.log(`[DEBUG] Successfully saved image and stored mapping: ${key} -> ${filename}`);
+      
       // Return the full absolute path, not just the filename
       return path.resolve(fullPath);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[DEBUG] Failed to save image ${filename}: ${message}`);
       throw new ImageExtractionError(`Failed to save image ${filename}: ${message}`, error as Error);
     }
   }
