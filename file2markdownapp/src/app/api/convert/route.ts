@@ -141,11 +141,23 @@ export async function POST(request: NextRequest) {
         for (const image of result.images) {
           const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
           if (!savedPath) continue;
-          const imageName = path.basename(savedPath);
-          const dest = path.join(publicImagesDir, imageName);
-          // Copy file for preview
-          await writeFile(dest, await (await import('fs/promises')).readFile(savedPath));
-          console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
+          
+          try {
+            // Check if source file exists before copying
+            const fs = await import('fs/promises');
+            await fs.access(savedPath);
+            
+            const imageName = path.basename(savedPath);
+            const dest = path.join(publicImagesDir, imageName);
+            
+            // Copy file for preview
+            const fileBuffer = await fs.readFile(savedPath);
+            await writeFile(dest, fileBuffer);
+            console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
+          } catch (copyError) {
+            console.warn(`[DEBUG] Failed to copy image ${savedPath}:`, copyError);
+            // Continue with other images instead of failing completely
+          }
         }
         
         // Rewrite markdown image links for preview to point to public mirror
@@ -158,11 +170,25 @@ export async function POST(request: NextRequest) {
         originalImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
         
         // Enhanced replacement to handle various image reference formats
+        // Also handle HTML img tags for better compatibility
         previewMarkdown = result.markdown
           .replace(/\]\(images\//g, `](${baseUrl}`)
           .replace(/\]\(\.\/images\//g, `](${baseUrl}`)
           .replace(/src="images\//g, `src="${baseUrl}`)
-          .replace(/src="\.\/images\//g, `src="${baseUrl}`);
+          .replace(/src="\.\/images\//g, `src="${baseUrl}`)
+          .replace(/src='images\//g, `src='${baseUrl}`)
+          .replace(/src='\.\/images\//g, `src='${baseUrl}`);
+        
+        // Additional fix: Ensure all image references use absolute URLs
+        previewMarkdown = previewMarkdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+          if (src.startsWith('images/') || src.startsWith('./images/')) {
+            const cleanSrc = src.replace(/^\.\/images\//, 'images/').replace(/^images\//, '');
+            const fullUrl = `${baseUrl}${cleanSrc}`;
+            console.log(`[DEBUG] Rewriting image URL: ${src} -> ${fullUrl}`);
+            return `![${alt}](${fullUrl})`;
+          }
+          return match;
+        });
         
         // Log rewritten markdown image references
         const rewrittenImageRefs = previewMarkdown.match(/!\[.*?\]\([^)]+\)/g) || [];

@@ -244,14 +244,45 @@ async function parseHwpBinary(
         throw new Error('Failed to create container element');
       }
       
-      // Initialize hwp.js viewer
-      new Viewer(container, uint8Array);
+      // Initialize hwp.js viewer with error handling
+      let viewer: unknown;
+      try {
+        viewer = new Viewer(container, uint8Array);
+        
+        // Check if viewer was created successfully
+        if (!viewer) {
+          throw new Error('Viewer instance is null or undefined');
+        }
+        
+        // Verify viewer has expected properties
+        const viewerObj = viewer as { type?: string };
+        if (viewerObj && typeof viewerObj === 'object') {
+          console.log('Viewer created successfully');
+        }
+        
+      } catch (viewerError) {
+        console.warn('Failed to initialize hwp.js Viewer:', viewerError);
+        throw new Error(`hwp.js Viewer initialization failed: ${viewerError instanceof Error ? viewerError.message : 'Unknown error'}`);
+      }
       
-      // Wait for viewer to process the document
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Wait longer for viewer to process the document and render content
+      await new Promise(resolve => setTimeout(resolve, 3000));
       
-      // Extract text content from the rendered DOM
-      const textContent = extractTextFromViewer(container);
+      // Try multiple approaches to extract actual content
+      let textContent: string[] = [];
+      
+      // Attempt 1: Extract from viewer container
+      textContent = extractTextFromViewer(container);
+      
+      // Attempt 2: If no meaningful content found, try direct viewer access
+      if (textContent.length === 0 || isOnlyCopyrightMessage(textContent)) {
+        textContent = extractFromViewerInstance(viewer, container);
+      }
+      
+      // Attempt 3: If still no content, try broader DOM extraction
+      if (textContent.length === 0 || isOnlyCopyrightMessage(textContent)) {
+        textContent = extractFromEntireContainer(container);
+      }
       
       // Parse images if requested
       const images = options.extractImages !== false ? 
@@ -450,18 +481,145 @@ async function parseHwpxXml(
 }
 
 /**
+ * Check if text is the Korean copyright message from hwp.js
+ */
+function isCopyrightMessage(text: string): boolean {
+  const copyrightPatterns = [
+    /본\s*제품은\s*한글과컴퓨터의\s*한\/글\s*문서\s*파일/,
+    /Copyright\s*2020\s*Han\s*Lee/,
+    /hanlee\.dev@gmail\.com/,
+    /개발하였습니다/,
+    /참고하여\s*개발/,
+    /공개\s*문서를\s*참고/
+  ];
+  
+  return copyrightPatterns.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if the entire content array contains only copyright messages
+ */
+function isOnlyCopyrightMessage(paragraphs: string[]): boolean {
+  if (paragraphs.length === 0) return true;
+  
+  const nonCopyrightContent = paragraphs.filter(p => !isCopyrightMessage(p) && p.trim().length > 0);
+  return nonCopyrightContent.length === 0;
+}
+
+/**
+ * Attempt to extract content directly from hwp.js viewer instance
+ */
+function extractFromViewerInstance(viewer: unknown, _container: Element): string[] {
+  const paragraphs: string[] = [];
+  
+  try {
+    // Try to access viewer's internal content if available
+    const viewerObj = viewer as { content?: unknown; document?: unknown; text?: string; pages?: unknown[] };
+    
+    if (viewerObj.text) {
+      const text = viewerObj.text.trim();
+      if (text && !isCopyrightMessage(text)) {
+        paragraphs.push(...text.split(/\n\s*\n/).filter(p => p.trim().length > 0));
+      }
+    }
+    
+    if (viewerObj.pages && Array.isArray(viewerObj.pages)) {
+      for (const page of viewerObj.pages) {
+        const pageObj = page as { text?: string; content?: string };
+        if (pageObj.text && !isCopyrightMessage(pageObj.text)) {
+          paragraphs.push(...pageObj.text.split(/\n\s*\n/).filter(p => p.trim().length > 0));
+        }
+        if (pageObj.content && !isCopyrightMessage(pageObj.content)) {
+          paragraphs.push(...pageObj.content.split(/\n\s*\n/).filter(p => p.trim().length > 0));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to extract from viewer instance:', e);
+  }
+  
+  return paragraphs.filter(p => !isCopyrightMessage(p));
+}
+
+/**
+ * Extract all text from container, including from child elements
+ */
+function extractFromEntireContainer(container: Element): string[] {
+  const paragraphs: string[] = [];
+  
+  try {
+    // Get all text nodes recursively
+    const ownerDocument = container.ownerDocument;
+    if (!ownerDocument) {
+      throw new Error('No owner document found');
+    }
+    
+    const walker = ownerDocument.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      null
+    );
+    
+    const textNodes: string[] = [];
+    let node = walker.nextNode();
+    while (node !== null) {
+      const text = node.textContent?.trim();
+      if (text && text.length > 2 && !isCopyrightMessage(text)) {
+        textNodes.push(text);
+      }
+      node = walker.nextNode();
+    }
+    
+    // Combine adjacent text nodes and split by natural breaks
+    const combinedText = textNodes.join(' ').trim();
+    if (combinedText) {
+      const lines = combinedText.split(/[\r\n]+/).filter(line => {
+        const trimmed = line.trim();
+        return trimmed.length > 0 && !isCopyrightMessage(trimmed);
+      });
+      paragraphs.push(...lines.map(line => line.trim()));
+    }
+  } catch (e) {
+    console.warn('Failed to extract from entire container:', e);
+    
+    // Final fallback: just get textContent and clean it up
+    const allText = container.textContent?.trim();
+    if (allText && !isCopyrightMessage(allText)) {
+      const cleaned = allText
+        .split(/[\r\n]+/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && !isCopyrightMessage(line));
+      paragraphs.push(...cleaned);
+    }
+  }
+  
+  return paragraphs.filter(p => !isCopyrightMessage(p));
+}
+
+/**
  * Extract text content from hwp.js rendered DOM
  */
 function extractTextFromViewer(container: Element): string[] {
   const paragraphs: string[] = [];
   
-  // Look for various text-containing elements
+  // Look for various text-containing elements, with improved hwp.js specific selectors
   const textSelectors = [
-    '[data-text]',
+    // hwp.js specific selectors (v0.0.3 might use these)
+    '.hwp-para',
     '.hwp-text',
+    '.hwp-line',
+    '.hwp-char',
+    '[data-hwp-text]',
+    '[data-text]',
+    '[data-content]',
+    // Generic selectors as fallback
     'p',
+    'div[data-type="paragraph"]',
+    'div[data-type="text"]',
+    'span[data-type="text"]',
     'div[style*="text"]',
-    'span'
+    'span',
+    'div'
   ];
   
   for (const selector of textSelectors) {
@@ -469,28 +627,37 @@ function extractTextFromViewer(container: Element): string[] {
       const elements = container.querySelectorAll(selector);
       elements.forEach(element => {
         const text = element.textContent?.trim();
-        if (text && text.length > 0 && !paragraphs.includes(text)) {
+        if (text && text.length > 0 && !paragraphs.includes(text) && !isCopyrightMessage(text)) {
           paragraphs.push(text);
         }
       });
       
-      if (paragraphs.length > 0) break; // Use first successful selector
+      // Only break if we found meaningful content (not just copyright)
+      if (paragraphs.length > 0 && !isOnlyCopyrightMessage(paragraphs)) break;
     } catch {
       continue; // Try next selector
     }
   }
   
-  // Fallback: get all text content
-  if (paragraphs.length === 0) {
+  // Fallback: get all text content and filter
+  if (paragraphs.length === 0 || isOnlyCopyrightMessage(paragraphs)) {
     const allText = container.textContent?.trim();
     if (allText) {
       // Split by common paragraph separators
-      const lines = allText.split(/\n\s*\n|\r\n\s*\r\n/);
-      paragraphs.push(...lines.filter(line => line.trim().length > 0));
+      const lines = allText.split(/\n\s*\n|\r\n\s*\r\n|\n/);
+      const filteredLines = lines
+        .filter(line => line.trim().length > 0)
+        .filter(line => !isCopyrightMessage(line.trim()))
+        .map(line => line.trim());
+      
+      if (filteredLines.length > 0) {
+        paragraphs.length = 0; // Clear any copyright-only content
+        paragraphs.push(...filteredLines);
+      }
     }
   }
   
-  return paragraphs;
+  return paragraphs.filter(p => !isCopyrightMessage(p));
 }
 
 /**
@@ -591,23 +758,26 @@ async function extractHwpxImages(
  * Convert HWP text content to markdown
  */
 function convertHwpContentToMarkdown(textContent: string[]): string {
-  if (textContent.length === 0) {
-    return '*No content found*';
+  // Filter out any remaining copyright messages
+  const filteredContent = textContent.filter(p => !isCopyrightMessage(p) && p.trim().length > 0);
+  
+  if (filteredContent.length === 0) {
+    return '*No readable content found in HWP file. The file may be corrupted, encrypted, or contain only images/graphics.*';
   }
   
   let markdown = '';
   
-  textContent.forEach((paragraph, index) => {
+  filteredContent.forEach((paragraph, index) => {
     if (paragraph.trim().length === 0) return;
     
     // Simple heuristics for formatting
-    if (paragraph.length < 50 && index === 0) {
+    if (paragraph.length < 50 && index === 0 && !paragraph.match(/^[0-9]+\./)) {
       // Likely a title
       markdown += `# ${paragraph}\n\n`;
     } else if (paragraph.match(/^[0-9]+\./)) {
       // Numbered list item
       markdown += `${paragraph}\n`;
-    } else if (paragraph.match(/^[-•]/)) {
+    } else if (paragraph.match(/^[-•*]/)) {
       // Bullet list item
       markdown += `${paragraph}\n`;
     } else {
@@ -616,7 +786,14 @@ function convertHwpContentToMarkdown(textContent: string[]): string {
     }
   });
   
-  return markdown.trim();
+  const result = markdown.trim();
+  
+  // Final check - if we only got copyright or very short content, provide helpful message
+  if (result.length < 10 || isCopyrightMessage(result)) {
+    return '*Unable to extract meaningful content from HWP file. This may be due to the limitations of the hwp.js library version 0.0.3 or the file format. Consider converting the file to HWPX format for better results.*';
+  }
+  
+  return result;
 }
 
 /**
@@ -779,6 +956,12 @@ function findImageReference(
   images: readonly ImageData[],
   relationshipMap: RelationshipMap
 ): string | null {
+  // Reset global counter at the start of each conversion to ensure fresh sequence
+  // This is a simple approach - in production you might want a more sophisticated reset mechanism
+  if (images.length > 0 && (!('__globalImageCounter' in findImageReference) || (findImageReference as any).__globalImageCounter >= images.length * 2)) {
+    (findImageReference as any).__globalImageCounter = 0;
+    console.log('[DEBUG] Reset global image counter for new conversion');
+  }
   if (!images || images.length === 0) return null;
   
   try {
@@ -796,7 +979,7 @@ function findImageReference(
       const directId = (r['@_id'] as string) || (r['@_refId'] as string) || (r['@_href'] as string) ||
                        (r['@_r:id'] as string) || (r['@_rId'] as string) || (r['@_rid'] as string) ||
                        (r['refId'] as string) || (r['r:id'] as string);
-      if (directId) return directId;
+      if (directId && typeof directId === 'string') return directId;
       for (const v of Object.values(r)) {
         const nested = findRidDeep(v, depth + 1);
         if (nested) return nested;
@@ -807,7 +990,7 @@ function findImageReference(
     imageId = findRidDeep(obj);
     
     // If we found an ID, try to match it with our extracted images
-    if (imageId) {
+    if (imageId && typeof imageId === 'string') {
       // Resolve via relationships first (rId -> target path inside zip)
       // Normalize id to check variants (with/without r:)
       const variants = [imageId, imageId.startsWith('r:') ? imageId.slice(2) : `r:${imageId}`];
@@ -821,8 +1004,8 @@ function findImageReference(
         }
       }
       // Fallback to substring match
-      if (!matchingImage) {
-        matchingImage = images.find(img => img.originalPath.includes(imageId as string) || img.savedPath.includes(imageId as string));
+      if (!matchingImage && typeof imageId === 'string') {
+        matchingImage = images.find(img => img.originalPath.includes(imageId) || img.savedPath.includes(imageId));
       }
       if (matchingImage) {
         const imageName = path.basename(matchingImage.savedPath);
@@ -877,19 +1060,19 @@ function findImageReference(
       }
     }
     
-    // If no specific match found, but we do have extracted images, prefer inserting in sequence
-    // Track a simple cursor on the drawing object to avoid repeating the same image across all refs
-    const objRec = obj as Record<string, unknown>;
-    if (!('__imageCursor' in objRec)) {
-      objRec['__imageCursor'] = 0;
+    // If no specific match found, but we do have extracted images, use a global counter
+    // to ensure each image reference gets a different image in sequence
+    if (!('__globalImageCounter' in findImageReference)) {
+      (findImageReference as any).__globalImageCounter = 0;
     }
-    const cursor = Number(objRec['__imageCursor']) || 0;
-    const selected = images[cursor % images.length];
-    objRec['__imageCursor'] = cursor + 1;
+    const globalCounter = (findImageReference as any).__globalImageCounter;
+    const selected = images[globalCounter % images.length];
+    (findImageReference as any).__globalImageCounter = globalCounter + 1;
+    
     if (selected) {
       const imageName = path.basename(selected.savedPath);
       const markdownRef = `![Image](images/${imageName})`;
-      console.log(`[DEBUG] Using fallback image reference: ${markdownRef} (cursor: ${cursor}, total images: ${images.length})`);
+      console.log(`[DEBUG] Using sequential image reference: ${markdownRef} (counter: ${globalCounter}, total images: ${images.length})`);
       console.log(`[DEBUG] Selected image: originalPath=${selected.originalPath}, savedPath=${selected.savedPath}`);
       return markdownRef;
     }

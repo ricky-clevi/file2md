@@ -14,6 +14,9 @@ export class ImageExtractor {
   constructor(outputDir: string = 'images') {
     this.outputDir = outputDir;
     
+    // Reset counter to ensure fresh start
+    this.reset();
+    
     // Create images directory if it doesn't exist
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
