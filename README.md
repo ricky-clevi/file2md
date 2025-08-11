@@ -4,18 +4,20 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX) into Markdown with **advanced layout preservation**, **image extraction**, and **chart conversion**.
+A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with **advanced layout preservation**, **image extraction**, **chart conversion**, and **Korean language support**.
 
 ## ✨ Features
 
-- 🔄 **Multiple Format Support**: PDF, DOCX, XLSX, PPTX
-- 🎨 **Layout Preservation**: Maintains document structure, tables, and formatting  
+- 🔄 **Multiple Format Support**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
+- 🎨 **Layout Preservation**: Maintains document structure, tables, and formatting
 - 🖼️ **Image Extraction**: Automatically extracts and references images
 - 📊 **Chart Conversion**: Converts charts to Markdown tables
 - 📝 **List & Table Support**: Proper nested lists and complex tables
+- 🌏 **Korean Language Support**: Full support for HWP/HWPX Korean document formats
 - 🔒 **Type Safety**: Full TypeScript support with comprehensive types
 - ⚡ **Modern ESM**: ES2022 modules with CommonJS compatibility
 - 🚀 **Zero Config**: Works out of the box
+- 🎯 **Visual Parsing**: Enhanced PPTX parsing with visual layout analysis
 
 ## 📦 Installation
 
@@ -38,13 +40,38 @@ console.log(result.markdown);
 const result = await convert('./presentation.pptx', {
   imageDir: 'extracted-images',
   preserveLayout: true,
-  extractCharts: true
+  extractCharts: true,
+  useVisualParser: true // Enhanced PPTX parsing
 });
 
 console.log(`✅ Converted successfully!`);
 console.log(`📄 Markdown length: ${result.markdown.length}`);
 console.log(`🖼️ Images extracted: ${result.images.length}`);
 console.log(`📊 Charts found: ${result.charts.length}`);
+console.log(`⏱️ Processing time: ${result.metadata.processingTime}ms`);
+```
+
+### Korean Document Support (HWP/HWPX)
+
+```typescript
+import { convert } from 'file2md';
+
+// Convert Korean HWP document
+const hwpResult = await convert('./document.hwp', {
+  imageDir: 'hwp-images',
+  preserveLayout: true,
+  extractImages: true
+});
+
+// Convert Korean HWPX document (XML-based format)
+const hwpxResult = await convert('./document.hwp', {
+  imageDir: 'hwpx-images',
+  preserveLayout: true,
+  extractImages: true
+});
+
+console.log(`🇰🇷 HWP content: ${hwpResult.markdown.substring(0, 100)}...`);
+console.log(`📄 HWPX pages: ${hwpResult.metadata.pageCount}`);
 ```
 
 ### CommonJS
@@ -83,10 +110,12 @@ const result = await convert(buffer, {
 ```typescript
 interface ConvertOptions {
   imageDir?: string;        // Directory for extracted images (default: 'images')
+  outputDir?: string;       // Output directory for slide screenshots (PPTX, falls back to imageDir)
   preserveLayout?: boolean; // Maintain document layout (default: true)
   extractCharts?: boolean;  // Convert charts to tables (default: true)
   extractImages?: boolean;  // Extract embedded images (default: true)
   maxPages?: number;        // Max pages for PDFs (default: unlimited)
+  useVisualParser?: boolean; // Enhanced visual parsing for PPTX (default: true)
 }
 ```
 
@@ -97,7 +126,7 @@ interface ConversionResult {
   markdown: string;           // Generated Markdown content
   images: ImageData[];        // Extracted image information
   charts: ChartData[];        // Extracted chart data
-  metadata: DocumentMetadata; // Document metadata
+  metadata: DocumentMetadata; // Document metadata with processing info
 }
 ```
 
@@ -109,21 +138,24 @@ interface ConversionResult {
 - ✅ **List recognition** (bullets, numbers)
 - ✅ **Heading detection** (ALL CAPS, colons)
 - ✅ **Page-to-image fallback** for complex layouts
+- ✅ **Embedded image extraction** when available
 
-### 📝 DOCX  
+### 📝 DOCX
 - ✅ **Heading hierarchy** (H1-H6)
 - ✅ **Text formatting** (bold, italic)
 - ✅ **Complex tables** with merged cells
 - ✅ **Nested lists** with proper indentation
 - ✅ **Embedded images** and charts
 - ✅ **Cell styling** (alignment, colors)
+- ✅ **Font size preservation** and formatting
 
 ### 📊 XLSX
 - ✅ **Multiple worksheets** as separate sections
 - ✅ **Cell formatting** (bold, colors, alignment)
-- ✅ **Data type preservation** 
+- ✅ **Data type preservation**
 - ✅ **Chart extraction** to data tables
 - ✅ **Conditional formatting** notes
+- ✅ **Shared strings** handling for large files
 
 ### 🎬 PPTX
 - ✅ **Slide-by-slide** organization
@@ -131,6 +163,24 @@ interface ConversionResult {
 - ✅ **Image placement** per slide
 - ✅ **Table extraction** from slides
 - ✅ **Multi-column layouts**
+- ✅ **Visual parsing** with enhanced layout analysis
+- ✅ **Title extraction** from document properties
+- ✅ **Chart and image** inline embedding
+
+### 🇰🇷 HWP (Korean)
+- ✅ **Binary format** parsing using hwp.js
+- ✅ **Korean text extraction** with proper encoding
+- ✅ **Image extraction** from embedded content
+- ✅ **Layout preservation** for Korean documents
+- ✅ **Copyright message filtering** for clean output
+
+### 🇰🇷 HWPX (Korean XML)
+- ✅ **XML-based format** parsing with JSZip
+- ✅ **Multiple section support** for large documents
+- ✅ **Relationship mapping** for image references
+- ✅ **OWPML structure** parsing
+- ✅ **Enhanced Korean text** processing
+- ✅ **BinData image extraction** from ZIP archive
 
 ## 🖼️ Image Handling
 
@@ -285,9 +335,161 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | Word   | `.docx`   | ✅     | ✅     | ✅     | ✅     | ✅    |
 | Excel  | `.xlsx`   | ✅     | ❌     | ✅     | ✅     | ❌    |
 | PowerPoint | `.pptx` | ✅   | ✅     | ✅     | ✅     | ❌    |
+| HWP    | `.hwp`    | ✅     | ✅     | ❌     | ❌     | ✅    |
+| HWPX   | `.hwpx`   | ✅     | ✅     | ❌     | ❌     | ✅    |
 
-*PDF images via page-to-image conversion
+*PDF images via page-to-image conversion or embedded extraction
+
+## 🌏 Korean Document Support
+
+file2md includes comprehensive support for Korean document formats:
+
+### HWP (한글)
+- **Binary format** used by Hangul (한글) word processor
+- **Legacy format** still widely used in Korean organizations
+- **Full text extraction** with Korean character encoding
+- **Image and chart** extraction support
+
+### HWPX (한글 XML)
+- **Modern XML-based** format, successor to HWP
+- **ZIP archive structure** with XML content files
+- **Enhanced parsing** with relationship mapping
+- **Multiple sections** and complex document support
+
+### Usage Examples
+
+```typescript
+// Convert Korean documents
+const koreanDocs = [
+  'report.hwp',      // Legacy binary format
+  'document.hwpx',   // Modern XML format
+  'presentation.pptx'
+];
+
+for (const doc of koreanDocs) {
+  const result = await convert(doc, {
+    imageDir: 'korean-docs-images',
+    preserveLayout: true
+  });
+  
+  console.log(`📄 ${doc}: ${result.markdown.length} characters`);
+  console.log(`🖼️ Images: ${result.images.length}`);
+  console.log(`⏱️ Processed in ${result.metadata.processingTime}ms`);
+}
+```
+
+## 🔧 Advanced Configuration
+
+### Performance Optimization
+
+```typescript
+import { convert } from 'file2md';
+
+// Optimize for large documents
+const result = await convert('./large-document.pdf', {
+  maxPages: 50,              // Limit PDF processing
+  extractImages: false,      // Disable images for speed
+  preserveLayout: true       // Keep layout analysis
+});
+
+// Enhanced PPTX processing
+const pptxResult = await convert('./presentation.pptx', {
+  useVisualParser: true,     // Enable visual layout analysis
+  outputDir: 'slides',       // Separate directory for slides
+  extractCharts: true,       // Extract chart data
+  extractImages: true        // Extract embedded images
+});
+```
+
+### Error Handling for Korean Documents
+
+```typescript
+import { convert, ParseError } from 'file2md';
+
+try {
+  const result = await convert('./korean-document.hwp');
+  console.log('Korean document converted successfully');
+} catch (error) {
+  if (error instanceof ParseError) {
+    console.error(`Failed to parse ${error.format} document:`, error.message);
+    // Handle Korean-specific parsing errors
+    if (error.format === 'HWP' || error.format === 'HWPX') {
+      console.log('Try converting to HWPX format for better compatibility');
+    }
+  }
+}
+```
+
+## 📈 Performance Metrics
+
+The library provides detailed performance metrics in the metadata:
+
+```typescript
+const result = await convert('./document.docx');
+
+console.log('Performance Metrics:');
+console.log(`- Processing time: ${result.metadata.processingTime}ms`);
+console.log(`- Pages processed: ${result.metadata.pageCount}`);
+console.log(`- Images extracted: ${result.metadata.imageCount}`);
+console.log(`- Charts found: ${result.metadata.chartCount}`);
+console.log(`- File type: ${result.metadata.fileType}`);
+console.log(`- MIME type: ${result.metadata.mimeType}`);
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/ricky-clevi/file2md.git
+cd file2md
+
+# Install dependencies
+npm install
+
+# Run tests
+npm test
+
+# Build the project
+npm run build
+
+# Run linting
+npm run lint
+```
+
+### Testing Korean Documents
+
+When testing Korean document support:
+
+```bash
+# Run specific tests for Korean formats
+npm test -- --testNamePattern="HWP"
+
+# Run with coverage for Korean parsers
+npm run test:coverage -- --collectCoverageFrom="src/parsers/hwp-*.ts"
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🔗 Links
+
+- [npm package](https://www.npmjs.com/package/file2md)
+- [GitHub repository](https://github.com/ricky-clevi/file2md)
+- [Issues & Bug Reports](https://github.com/ricky-clevi/file2md/issues)
+- [Korean Document Format Info](https://www.hancom.com/)
 
 ---
 
 **Made with ❤️ and TypeScript**
+**🇰🇷 Enhanced with Korean document support**
