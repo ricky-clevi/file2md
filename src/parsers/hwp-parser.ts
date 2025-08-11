@@ -797,6 +797,127 @@ function convertHwpContentToMarkdown(textContent: string[]): string {
 }
 
 /**
+ * Smart join markdown parts with appropriate spacing
+ */
+function smartJoinMarkdownParts(parts: string[]): string {
+  if (parts.length === 0) return '';
+  
+  const result: string[] = [];
+  
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i].trim();
+    if (!part) continue;
+    
+    // Add appropriate spacing based on content type and position
+    if (i > 0) {
+      const prevPart = parts[i - 1].trim();
+      
+      // Detect if we should add a paragraph break
+      const shouldAddParagraphBreak = shouldAddParagraphBreakBetween(prevPart, part);
+      
+      if (shouldAddParagraphBreak) {
+        // Add double line break for paragraph separation
+        result.push('');
+        result.push('');
+      } else {
+        // Add single space for sentence continuation
+        result.push(' ');
+      }
+    }
+    
+    result.push(part);
+  }
+  
+  return result.join('');
+}
+
+/**
+ * Determine if we should add a paragraph break between two parts
+ */
+function shouldAddParagraphBreakBetween(prevPart: string, currentPart: string): boolean {
+  // Images always get paragraph breaks
+  if (prevPart.startsWith('![') || currentPart.startsWith('![')) {
+    return true;
+  }
+  
+  // Headings, list items get paragraph breaks
+  if (currentPart.match(/^#{1,6}\s/) || currentPart.match(/^[-*+]\s/) || currentPart.match(/^\d+\.\s/)) {
+    return true;
+  }
+  
+  // If previous part ends with sentence terminator and current part starts a new sentence
+  const prevEndsWithSentence = /[.!?]$/.test(prevPart);
+  const currentStartsWithNewSentence = /^[A-Z가-힣]/.test(currentPart) && !currentPart.startsWith(',');
+  
+  // If previous part ends with a period that's likely an abbreviation
+  const prevEndsWithAbbreviation = /(약|등|명|년|월|일|시|분|초|km|m|%)$/.test(prevPart);
+  
+  // Add paragraph break if:
+  // 1. Previous part ends with sentence terminator AND current part starts a new sentence
+  // 2. BUT don't add break if it looks like an abbreviation or continuation
+  if (prevEndsWithSentence && currentStartsWithNewSentence && !prevEndsWithAbbreviation) {
+    return true;
+  }
+  
+  // Special patterns that indicate paragraph breaks
+  const paragraphStartPatterns = [
+    /^ㅇ\s/, // Korean bullet point
+    /^그리고/,
+    /^또한/,
+    /^한편/,
+    /^아울러/,
+    /^우선/,
+    /^따라서/,
+    /^그러나/,
+    /^하지만/,
+    /^또는/,
+    /^및/,
+    /^또/,
+    /^이에/,
+    /^여기에/,
+    /^이로써/,
+    /^결국/,
+    /^마지막으로/
+  ];
+  
+  const isParagraphStart = paragraphStartPatterns.some(pattern => pattern.test(currentPart));
+  
+  if (isParagraphStart) {
+    return true;
+  }
+  
+  // Statistical/data patterns that often start new paragraphs
+  const dataPatterns = [
+    /^\*\s/, // Bullet points with asterisk
+    /^\d+%\s?$/, // Percentage alone
+    /^\d+명\s?$/, // Number + "명" (people)
+    /^\d+년\s?$/, // Year
+    /^\d+월\s?$/, // Month
+    /^\d+일\s?$/, // Day
+    /^\d+시\s?$/, // Hour
+    /^\d+분\s?$/, // Minute
+    /^\d+초\s?$/, // Second
+    /^평일\s/,
+    /^주말\s/,
+    /^금요일\s/,
+    /^토요일\s/,
+    /^일요일\s/,
+    /^월요일\s/,
+    /^화요일\s/,
+    /^수요일\s/,
+    /^목요일\s/
+  ];
+  
+  const isDataStart = dataPatterns.some(pattern => pattern.test(currentPart));
+  
+  if (isDataStart && prevEndsWithSentence) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Convert OWPML structure to markdown
  */
 function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[] = [], relationshipMap: RelationshipMap = {}): string {
@@ -810,6 +931,13 @@ function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[]
     
     // Extract all text content and image references recursively
     extractContentNodes(owpmlData, contentItems, positionCounter, images, relationshipMap);
+    
+    // DEBUG: Log extracted content items
+    console.log('[DEBUG] Total content items extracted:', contentItems.length);
+    console.log('[DEBUG] Content items breakdown:');
+    contentItems.forEach((item, index) => {
+      console.log(`[DEBUG] Item ${index}: type=${item.type}, position=${item.position}, content="${item.content.substring(0, 50)}${item.content.length > 50 ? '...' : ''}"`);
+    });
     
     // Sort by position to maintain document order
     contentItems.sort((a, b) => a.position - b.position);
@@ -826,7 +954,16 @@ function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[]
         }
       }
       
-      markdown = markdownParts.join('\n\n');
+      // DEBUG: Log how parts are being joined
+      console.log('[DEBUG] Total markdown parts:', markdownParts.length);
+      console.log('[DEBUG] Markdown parts before joining:');
+      markdownParts.forEach((part, index) => {
+        console.log(`[DEBUG] Part ${index}: "${part.substring(0, 50)}${part.length > 50 ? '...' : ''}"`);
+      });
+      console.log('[DEBUG] Joining with smart spacing - single line breaks between paragraphs');
+      
+      // Smart joining: use double line breaks for paragraph separation, single line breaks for flow
+      markdown = smartJoinMarkdownParts(markdownParts);
     }
     
     if (!markdown.trim()) {
@@ -1098,6 +1235,8 @@ function extractParagraphContent(
 ): void {
   if (!para) return;
   
+  console.log('[DEBUG] Processing new paragraph');
+  
   // Check for images/drawings in paragraph first
   const obj = para as Record<string, unknown>;
   if (obj['hp:pic'] || obj['PICTURE'] || obj['IMAGE'] || obj['hp:draw'] || obj['DRAWING']) {
@@ -1111,21 +1250,33 @@ function extractParagraphContent(
     }
   }
   
-  // Then extract text content using the original logic
-  extractParagraphText(para, contentItems, positionCounter);
+  // Extract and combine all text content from this paragraph into a single content item
+  const combinedText = extractCombinedParagraphText(para);
+  if (combinedText && combinedText.trim().length > 0) {
+    console.log(`[DEBUG] Adding combined paragraph text: "${combinedText.substring(0, 50)}${combinedText.length > 50 ? '...' : ''}"`);
+    contentItems.push({
+      type: 'text',
+      content: combinedText.trim(),
+      position: positionCounter.value++
+    });
+  }
 }
 
 
 /**
- * Extract text from a paragraph node (legacy function)
+ * Extract and combine all text content from a paragraph into a single string
  */
-function extractParagraphText(para: unknown, contentItems: {type: 'text' | 'image', content: string, position: number}[], positionCounter: {value: number}): void {
-  if (!para) return;
+function extractCombinedParagraphText(para: unknown): string {
+  if (!para) return '';
+  
+  const textSegments: string[] = [];
   
   // Look for hp:run or run nodes
   const runs = (para as { 'hp:run'?: unknown, run?: unknown, RUN?: unknown })['hp:run'] || (para as { run?: unknown })['run'] || (para as { RUN?: unknown })['RUN'];
   if (runs) {
     const runArray = Array.isArray(runs) ? runs : [runs];
+    console.log(`[DEBUG] Processing ${runArray.length} runs in paragraph for combination`);
+    
     for (const run of runArray) {
       // Look for hp:t or t nodes (text content)
       const textNode = (run as { 'hp:t'?: unknown, t?: unknown, T?: unknown, '#text'?: unknown })['hp:t'] || (run as { t?: unknown })['t'] || (run as { T?: unknown })['T'] || (run as { '#text'?: unknown })['#text'];
@@ -1133,20 +1284,14 @@ function extractParagraphText(para: unknown, contentItems: {type: 'text' | 'imag
         if (typeof textNode === 'string') {
           const text = textNode.trim();
           if (text && !isMetadata(text)) {
-            contentItems.push({
-              type: 'text',
-              content: text,
-              position: positionCounter.value++
-            });
+            console.log(`[DEBUG] Adding text segment from run: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`);
+            textSegments.push(text);
           }
         } else if ((textNode as { '#text'?: string })['#text']) {
           const text = (textNode as { '#text': string })['#text'].trim();
           if (text && !isMetadata(text)) {
-            contentItems.push({
-              type: 'text',
-              content: text,
-              position: positionCounter.value++
-            });
+            console.log(`[DEBUG] Adding text segment from run.#text: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`);
+            textSegments.push(text);
           }
         }
       }
@@ -1157,11 +1302,7 @@ function extractParagraphText(para: unknown, contentItems: {type: 'text' | 'imag
   if ((para as { '#text'?: string })['#text']) {
     const text = (para as { '#text': string })['#text'].trim();
     if (text && !isMetadata(text)) {
-      contentItems.push({
-        type: 'text',
-        content: text,
-        position: positionCounter.value++
-      });
+      textSegments.push(text);
     }
   }
   
@@ -1172,24 +1313,22 @@ function extractParagraphText(para: unknown, contentItems: {type: 'text' | 'imag
       if ((textNode as { '#text'?: string })['#text']) {
         const text = (textNode as { '#text': string })['#text'].trim();
         if (text && !isMetadata(text)) {
-          contentItems.push({
-            type: 'text',
-            content: text,
-            position: positionCounter.value++
-          });
+          textSegments.push(text);
         }
       } else if (typeof textNode === 'string') {
         const text = textNode.trim();
         if (text && !isMetadata(text)) {
-          contentItems.push({
-            type: 'text',
-            content: text,
-            position: positionCounter.value++
-          });
+          textSegments.push(text);
         }
       }
     }
   }
+  
+  // Combine all text segments with single spaces
+  const combinedText = textSegments.join(' ');
+  console.log(`[DEBUG] Combined ${textSegments.length} segments into: "${combinedText.substring(0, 50)}${combinedText.length > 50 ? '...' : ''}"`);
+  
+  return combinedText;
 }
 
 /**
