@@ -30,9 +30,7 @@ export default function Home() {
   const [isConverting, setIsConverting] = useState(false);
   const [result, setResult] = useState<ConversionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [preserveLayout, setPreserveLayout] = useState(true);
   const [extractImages, setExtractImages] = useState(true);
-  const [extractCharts, setExtractCharts] = useState(true);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -66,9 +64,9 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append('file', selectedFile);
-    formData.append('preserveLayout', String(preserveLayout));
+    formData.append('preserveLayout', String(true));
     formData.append('extractImages', String(extractImages));
-    formData.append('extractCharts', String(extractCharts));
+    formData.append('extractCharts', String(true));
 
     try {
       const response = await fetch('/api/convert', {
@@ -188,16 +186,8 @@ export default function Home() {
               {/* Options */}
               <div className="grid sm:grid-cols-3 gap-4 mt-6">
                 <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
-                  <input type="checkbox" checked={preserveLayout} onChange={e => setPreserveLayout(e.target.checked)} />
-                  Preserve layout
-                </label>
-                <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
                   <input type="checkbox" checked={extractImages} onChange={e => setExtractImages(e.target.checked)} />
                   Extract images
-                </label>
-                <label className="flex items-center gap-2 text-sm text-gray-700 border rounded-md p-3">
-                  <input type="checkbox" checked={extractCharts} onChange={e => setExtractCharts(e.target.checked)} />
-                  Extract charts (DOCX/PPTX)
                 </label>
               </div>
 
