@@ -34,11 +34,11 @@ interface DocxBody {
   readonly 'w:tbl'?: readonly unknown[];
 }
 
-interface DocxDocument {
-  readonly 'w:document': readonly [{ 
-    readonly 'w:body': readonly [DocxBody];
-  }];
-}
+// interface DocxDocument {
+//   readonly 'w:document': readonly [{
+//     readonly 'w:body': readonly [DocxBody];
+//   }];
+// }
 
 interface ParagraphData {
   readonly text: string;
@@ -81,14 +81,55 @@ export async function parseDocx(
     const layoutParser = new LayoutParser();
     
     const xmlContent = await documentXml.async('string');
-    const result = await parseStringPromise(xmlContent) as DocxDocument;
+    console.log('[DEBUG] DOCX XML content length:', xmlContent.length);
+    console.log('[DEBUG] DOCX XML content preview (first 500 chars):', xmlContent.substring(0, 500));
+    
+    // Check for XML namespaces in the content
+    const namespaceMatches = xmlContent.match(/xmlns:[^=]+="[^"]+"/g);
+    console.log('[DEBUG] Found XML namespaces:', namespaceMatches);
+    
+    // Try parsing with different options to handle namespaces
+    const parseOptions = {
+      explicitCharkey: false,
+      trim: true,
+      normalize: true,
+      explicitRoot: true,  // Keep the root element
+      emptyTag: null as any,
+      explicitChildren: false,
+      charsAsChildren: false,
+      includeWhiteChars: false,
+      mergeAttrs: false,
+      attrNameProcessors: [] as any[],
+      attrValueProcessors: [] as any[],
+      tagNameProcessors: [] as any[],
+      valueProcessors: [] as any[]
+    };
+    
+    console.log('[DEBUG] Attempting XML parse with options:', JSON.stringify(parseOptions, null, 2));
+    const result = await parseStringPromise(xmlContent, parseOptions) as any;
+    console.log('[DEBUG] Parsed XML result keys:', Object.keys(result));
+    console.log('[DEBUG] Full parsed XML structure:', JSON.stringify(result, null, 2));
     
     // Handle both array and non-array XML parsing results
-    const document: { 'w:body': readonly [DocxBody] } | undefined = result['w:document']?.[0];
+    // The structure should be: result['w:document'] -> document element
+    let document: { 'w:body': readonly [DocxBody] } | undefined;
     
-    if (!document) {
+    if (result['w:document']) {
+      // If w:document exists directly
+      document = Array.isArray(result['w:document']) ? result['w:document'][0] : result['w:document'];
+    } else if (result['w:body']) {
+      // If w:body is at the top level (no document wrapper), create a synthetic document
+      console.log('[DEBUG] Found w:body at top level, creating synthetic document structure');
+      document = { 'w:body': Array.isArray(result['w:body']) ? result['w:body'] as any : [result['w:body']] };
+    } else {
+      console.log('[DEBUG] Available top-level keys in parsed result:', Object.keys(result));
+      // Check if document exists under a different key
+      const alternativeKeys = Object.keys(result).filter(key => key.toLowerCase().includes('document'));
+      console.log('[DEBUG] Alternative document-related keys:', alternativeKeys);
       throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
     }
+    
+    console.log('[DEBUG] Document element found:', !!document);
     
     const body: DocxBody | undefined = document['w:body']?.[0];
     
@@ -335,15 +376,81 @@ async function extractImageFromRun(
   imageExtractor: ImageExtractor,
   extractedImages: readonly ImageData[]
 ): Promise<string | null> {
-  // This is a simplified image extraction - in reality, we'd need to parse the drawing XML
-  // and match it with the extracted images
-  if (extractedImages.length > 0) {
-    const img = extractedImages.find(img => img.savedPath);
-    if (img) {
-      // Extract just the filename from the full path
-      const filename = path.basename(img.savedPath);
+  const runData = run as {
+    'w:drawing'?: readonly [{
+      'wp:inline'?: readonly [{
+        'a:graphic'?: readonly [{
+          'a:graphicData'?: readonly [{
+            'pic:pic'?: readonly [{
+              'pic:blipFill'?: readonly [{
+                'a:blip'?: readonly [{ $?: { 'r:embed'?: string } }];
+              }];
+            }];
+          }];
+        }];
+      }];
+    }];
+    'w:pict'?: readonly [{
+      'v:shape'?: readonly [{
+        'v:imagedata'?: readonly [{ $?: { 'r:id'?: string } }];
+      }];
+    }];
+  };
+
+  let imageId: string | null = null;
+
+  // Try to extract image relationship ID from drawing
+  if (runData['w:drawing']) {
+    const drawing = runData['w:drawing'][0];
+    const inline = drawing['wp:inline']?.[0];
+    const graphic = inline?.['a:graphic']?.[0];
+    const graphicData = graphic?.['a:graphicData']?.[0];
+    const pic = graphicData?.['pic:pic']?.[0];
+    const blipFill = pic?.['pic:blipFill']?.[0];
+    const blip = blipFill?.['a:blip']?.[0];
+    
+    if (blip?.$?.['r:embed']) {
+      imageId = blip.$['r:embed'];
+    }
+  }
+  
+  // Try to extract from legacy picture format
+  if (!imageId && runData['w:pict']) {
+    const pict = runData['w:pict'][0];
+    const shape = pict['v:shape']?.[0];
+    const imageData = shape?.['v:imagedata']?.[0];
+    
+    if (imageData?.$?.['r:id']) {
+      imageId = imageData.$['r:id'];
+    }
+  }
+
+  if (imageId) {
+    // Find the matching image by relationship ID or original path
+    const matchingImage = extractedImages.find(img => 
+      img.originalPath.includes(imageId) || 
+      img.originalPath.endsWith(`${imageId}.png`) ||
+      img.originalPath.endsWith(`${imageId}.jpg`) ||
+      img.originalPath.endsWith(`${imageId}.jpeg`) ||
+      img.originalPath.includes('image')
+    );
+    
+    if (matchingImage && matchingImage.savedPath) {
+      const filename = path.basename(matchingImage.savedPath);
+      console.log(`📎 Found DOCX image: ${filename} (ID: ${imageId})`);
       return imageExtractor.getImageMarkdown('Document Image', filename);
     }
   }
+  
+  // Fallback: if we have images but couldn't match, use the first available one
+  if (extractedImages.length > 0) {
+    const img = extractedImages.find(img => img.savedPath);
+    if (img) {
+      const filename = path.basename(img.savedPath);
+      console.log(`📎 Using fallback DOCX image: ${filename}`);
+      return imageExtractor.getImageMarkdown('Document Image', filename);
+    }
+  }
+  
   return null;
 }

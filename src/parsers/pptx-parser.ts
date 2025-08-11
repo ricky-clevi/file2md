@@ -432,7 +432,9 @@ async function extractSlideTextContent(
 
 /**
  * Extract image references from slide XML when visual parser is not available
+ * @deprecated This function is currently unused but kept for potential future use
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function extractSlideImages(
   xmlContent: string,
   slideNumber: number,

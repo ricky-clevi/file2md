@@ -1,5 +1,6 @@
 import pdfParse from 'pdf-parse';
 import type { Buffer } from 'node:buffer';
+import path from 'node:path';
 
 import { PDFExtractor, type PDFParseOptions, type PDFParseResult } from '../utils/pdf-extractor.js';
 import { ParseError, InvalidFileError } from '../types/errors.js';
@@ -27,16 +28,38 @@ export async function parsePdf(
       pageCount = Math.min(pageCount, options.maxPages);
     }
     
+    // Try to extract embedded images from PDF
+    console.log('📎 Attempting to extract embedded images from PDF...');
+    try {
+      const embeddedImages = await extractEmbeddedImages(buffer, imageExtractor);
+      if (embeddedImages.length > 0) {
+        console.log(`🎉 Found ${embeddedImages.length} embedded images in PDF`);
+        images.push(...embeddedImages);
+      }
+    } catch (embeddedError: unknown) {
+      console.warn('Failed to extract embedded images:', embeddedError instanceof Error ? embeddedError.message : 'Unknown error');
+    }
+    
     // Try to extract text with enhanced layout
     if (data.text && data.text.trim()) {
       console.log('📄 Extracting text with layout enhancement...');
       try {
         const enhancedText = await pdfExtractor.enhanceTextWithLayout(data.text, data);
         markdown += enhancedText;
+        
+        // Embed any extracted images inline within the text content
+        if (images.length > 0) {
+          markdown += await embedImagesInContent(images, imageExtractor);
+        }
       } catch {
         console.warn('Layout enhancement failed, falling back to basic text extraction');
         // Fall back to basic text extraction
         markdown = extractBasicText(data.text);
+        
+        // Still try to embed images
+        if (images.length > 0) {
+          markdown += await embedImagesInContent(images, imageExtractor);
+        }
       }
     }
     
@@ -100,6 +123,50 @@ export async function parsePdf(
     
     throw new ParseError('PDF', message, error as Error);
   }
+}
+
+/**
+ * Extract embedded images from PDF
+ */
+async function extractEmbeddedImages(
+  _buffer: Buffer,
+  _imageExtractor: ImageExtractor
+): Promise<ImageData[]> {
+  try {
+    // For now, we'll use a placeholder approach since PDF image extraction
+    // is complex and would require parsing the PDF structure directly
+    // In a future implementation, we could use libraries like pdf2pic or pdf-poppler
+    // to extract individual images rather than converting entire pages
+    
+    console.log('📎 PDF embedded image extraction is a placeholder - using page conversion fallback');
+    return [];
+  } catch (error: unknown) {
+    console.warn('Failed to extract embedded PDF images:', error instanceof Error ? error.message : 'Unknown error');
+    return [];
+  }
+}
+
+/**
+ * Embed images inline within content
+ */
+async function embedImagesInContent(
+  images: readonly ImageData[],
+  imageExtractor: ImageExtractor
+): Promise<string> {
+  if (images.length === 0) return '';
+  
+  let imageMarkdown = '\n\n## Document Images\n\n';
+  
+  for (const [index, image] of images.entries()) {
+    if (image.savedPath) {
+      const filename = path.basename(image.savedPath);
+      console.log(`📎 Embedding PDF image: ${filename}`);
+      imageMarkdown += imageExtractor.getImageMarkdown(`Image ${index + 1}`, filename);
+      imageMarkdown += '\n\n';
+    }
+  }
+  
+  return imageMarkdown;
 }
 
 /**

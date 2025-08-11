@@ -14,7 +14,7 @@
     "@types/multer": "^2.0.0",
     "@types/sharp": "^0.31.1",
     "archiver": "^7.0.1",
-    "file2md": "^1.2.20",
+    "file2md": "^1.2.23",
     "multer": "^2.0.2",
     "next": "15.4.4",
     "react": "19.1.0",

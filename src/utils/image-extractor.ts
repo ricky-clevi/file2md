@@ -107,8 +107,8 @@ export class ImageExtractor {
         try {
           finalBuffer = await this.convertImageToWebFormat(buffer, originalExt);
           finalExt = '.png';
-        } catch (convertError) {
-          console.warn(`[DEBUG] Sharp conversion failed for ${originalExt}, using original buffer with PNG extension`);
+        } catch (conversionError: unknown) {
+          console.warn(`[DEBUG] Sharp conversion failed for ${originalExt}, using original buffer with PNG extension:`, conversionError instanceof Error ? conversionError.message : 'Unknown error');
           finalExt = '.png';
         }
       }
