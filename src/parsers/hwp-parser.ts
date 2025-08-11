@@ -254,11 +254,6 @@ async function parseHwpBinary(
           throw new Error('Viewer instance is null or undefined');
         }
         
-        // Verify viewer has expected properties
-        const viewerObj = viewer as { type?: string };
-        if (viewerObj && typeof viewerObj === 'object') {
-          console.log('Viewer created successfully');
-        }
         
       } catch (viewerError) {
         console.warn('Failed to initialize hwp.js Viewer:', viewerError);
@@ -337,7 +332,6 @@ async function parseHwpxXml(
     
     // Log all files in the ZIP for debugging
     const allFiles = Object.keys(zip.files);
-    console.log('HWPX archive contains files:', allFiles);
     
     // Find main content files in HWPX (OWPML format)
     // HWPX structure typically has sections in Contents/section0.xml, section1.xml, etc.
@@ -358,15 +352,9 @@ async function parseHwpxXml(
     
     // Try to find any section files
     const sectionFiles = allFiles.filter(f => f.match(/Contents\/section\d+\.xml/));
-    if (sectionFiles.length > 0) {
-      console.log('Found section files:', sectionFiles);
-    }
-    
+
     // Try to find XML files
     const xmlFiles = allFiles.filter(f => f.endsWith('.xml'));
-    if (xmlFiles.length > 0) {
-      console.log('Found XML files:', xmlFiles);
-    }
     
     let contentFile = null;
     let contentFileName = '';
@@ -435,7 +423,6 @@ async function parseHwpxXml(
           });
           
           const parsedXml = parser.parse(xmlContent);
-          console.log(`Parsed HWPX section: ${sectionFileName}`);
           
           // Convert each section to markdown and combine
           const sectionMarkdown = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
@@ -456,7 +443,6 @@ async function parseHwpxXml(
       });
       
       const parsedXml = parser.parse(xmlContent);
-      console.log(`Parsed HWPX XML from ${contentFileName}`);
       allContent = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
     }
     
@@ -739,7 +725,6 @@ async function extractHwpxImages(
               size: imageBuffer.length
             });
             
-            console.log(`Extracted and saved image: ${fileName} -> ${savedPath}`);
           }
           
         } catch (e) {
@@ -936,13 +921,7 @@ function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[]
     
     // Extract all text content and image references recursively
     extractContentNodes(owpmlData, contentItems, positionCounter, images, relationshipMap);
-    
-    // DEBUG: Log extracted content items
-    console.log('[DEBUG] Total content items extracted:', contentItems.length);
-    console.log('[DEBUG] Content items breakdown:');
-    contentItems.forEach((item, index) => {
-      console.log(`[DEBUG] Item ${index}: type=${item.type}, position=${item.position}, content="${item.content.substring(0, 50)}${item.content.length > 50 ? '...' : ''}"`);
-    });
+
     
     // Sort by position to maintain document order
     contentItems.sort((a, b) => a.position - b.position);
@@ -958,14 +937,6 @@ function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[]
           markdownParts.push(item.content);
         }
       }
-      
-      // DEBUG: Log how parts are being joined
-      console.log('[DEBUG] Total markdown parts:', markdownParts.length);
-      console.log('[DEBUG] Markdown parts before joining:');
-      markdownParts.forEach((part, index) => {
-        console.log(`[DEBUG] Part ${index}: "${part.substring(0, 50)}${part.length > 50 ? '...' : ''}"`);
-      });
-      console.log('[DEBUG] Joining with smart spacing - single line breaks between paragraphs');
       
       // Smart joining: use double line breaks for paragraph separation, single line breaks for flow
       markdown = smartJoinMarkdownParts(markdownParts);
@@ -1102,7 +1073,6 @@ function findImageReference(
   // This is a simple approach - in production you might want a more sophisticated reset mechanism
   if (images.length > 0 && (!('__globalImageCounter' in findImageReference) || (findImageReference as any).__globalImageCounter >= images.length * 2)) {
     (findImageReference as any).__globalImageCounter = 0;
-    console.log('[DEBUG] Reset global image counter for new conversion');
   }
   if (!images || images.length === 0) return null;
   
@@ -1152,7 +1122,6 @@ function findImageReference(
       if (matchingImage) {
         const imageName = path.basename(matchingImage.savedPath);
         const markdownRef = `![Image](images/${imageName})`;
-        console.log(`[DEBUG] Found matching image: ${markdownRef} (originalPath: ${matchingImage.originalPath}, savedPath: ${matchingImage.savedPath})`);
         return markdownRef;
       }
     }
@@ -1197,7 +1166,6 @@ function findImageReference(
       if (matchingImage) {
         const imageName = path.basename(matchingImage.savedPath);
         const markdownRef = `![Image](images/${imageName})`;
-        console.log(`[DEBUG] Found direct target match: ${markdownRef} (originalPath: ${matchingImage.originalPath}, savedPath: ${matchingImage.savedPath})`);
         return markdownRef;
       }
     }
@@ -1214,11 +1182,8 @@ function findImageReference(
     if (selected) {
       const imageName = path.basename(selected.savedPath);
       const markdownRef = `![Image](images/${imageName})`;
-      console.log(`[DEBUG] Using sequential image reference: ${markdownRef} (counter: ${globalCounter}, total images: ${images.length})`);
-      console.log(`[DEBUG] Selected image: originalPath=${selected.originalPath}, savedPath=${selected.savedPath}`);
       return markdownRef;
     }
-    console.log(`[DEBUG] No fallback image available (total images: ${images.length})`);
     return null;
     
   } catch (e) {
@@ -1240,7 +1205,6 @@ function extractParagraphContent(
 ): void {
   if (!para) return;
   
-  console.log('[DEBUG] Processing new paragraph');
   
   // Check for images/drawings in paragraph first
   const obj = para as Record<string, unknown>;
@@ -1258,7 +1222,6 @@ function extractParagraphContent(
   // Extract and combine all text content from this paragraph into a single content item
   const combinedText = extractCombinedParagraphText(para);
   if (combinedText && combinedText.trim().length > 0) {
-    console.log(`[DEBUG] Adding combined paragraph text: "${combinedText.substring(0, 50)}${combinedText.length > 50 ? '...' : ''}"`);
     contentItems.push({
       type: 'text',
       content: combinedText.trim(),
@@ -1280,7 +1243,6 @@ function extractCombinedParagraphText(para: unknown): string {
   const runs = (para as { 'hp:run'?: unknown, run?: unknown, RUN?: unknown })['hp:run'] || (para as { run?: unknown })['run'] || (para as { RUN?: unknown })['RUN'];
   if (runs) {
     const runArray = Array.isArray(runs) ? runs : [runs];
-    console.log(`[DEBUG] Processing ${runArray.length} runs in paragraph for combination`);
     
     for (const run of runArray) {
       // Look for hp:t or t nodes (text content)
@@ -1289,13 +1251,11 @@ function extractCombinedParagraphText(para: unknown): string {
         if (typeof textNode === 'string') {
           const text = textNode.trim();
           if (text && !isMetadata(text)) {
-            console.log(`[DEBUG] Adding text segment from run: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`);
             textSegments.push(text);
           }
         } else if ((textNode as { '#text'?: string })['#text']) {
           const text = (textNode as { '#text': string })['#text'].trim();
           if (text && !isMetadata(text)) {
-            console.log(`[DEBUG] Adding text segment from run.#text: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`);
             textSegments.push(text);
           }
         }
@@ -1331,7 +1291,6 @@ function extractCombinedParagraphText(para: unknown): string {
   
   // Combine all text segments with single spaces
   const combinedText = textSegments.join(' ');
-  console.log(`[DEBUG] Combined ${textSegments.length} segments into: "${combinedText.substring(0, 50)}${combinedText.length > 50 ? '...' : ''}"`);
   
   return combinedText;
 }

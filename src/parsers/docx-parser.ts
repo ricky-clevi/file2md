@@ -81,12 +81,7 @@ export async function parseDocx(
     const layoutParser = new LayoutParser();
     
     const xmlContent = await documentXml.async('string');
-    console.log('[DEBUG] DOCX XML content length:', xmlContent.length);
-    console.log('[DEBUG] DOCX XML content preview (first 500 chars):', xmlContent.substring(0, 500));
-    
-    // Check for XML namespaces in the content
-    const namespaceMatches = xmlContent.match(/xmlns:[^=]+="[^"]+"/g);
-    console.log('[DEBUG] Found XML namespaces:', namespaceMatches);
+  
     
     // Try parsing with different options to handle namespaces
     const parseOptions = {
@@ -105,10 +100,7 @@ export async function parseDocx(
       valueProcessors: [] as any[]
     };
     
-    console.log('[DEBUG] Attempting XML parse with options:', JSON.stringify(parseOptions, null, 2));
     const result = await parseStringPromise(xmlContent, parseOptions) as any;
-    console.log('[DEBUG] Parsed XML result keys:', Object.keys(result));
-    console.log('[DEBUG] Full parsed XML structure:', JSON.stringify(result, null, 2));
     
     // Handle both array and non-array XML parsing results
     // The structure should be: result['w:document'] -> document element
@@ -119,17 +111,12 @@ export async function parseDocx(
       document = Array.isArray(result['w:document']) ? result['w:document'][0] : result['w:document'];
     } else if (result['w:body']) {
       // If w:body is at the top level (no document wrapper), create a synthetic document
-      console.log('[DEBUG] Found w:body at top level, creating synthetic document structure');
       document = { 'w:body': Array.isArray(result['w:body']) ? result['w:body'] as any : [result['w:body']] };
     } else {
-      console.log('[DEBUG] Available top-level keys in parsed result:', Object.keys(result));
       // Check if document exists under a different key
-      const alternativeKeys = Object.keys(result).filter(key => key.toLowerCase().includes('document'));
-      console.log('[DEBUG] Alternative document-related keys:', alternativeKeys);
       throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
     }
     
-    console.log('[DEBUG] Document element found:', !!document);
     
     const body: DocxBody | undefined = document['w:body']?.[0];
     
@@ -437,7 +424,6 @@ async function extractImageFromRun(
     
     if (matchingImage && matchingImage.savedPath) {
       const filename = path.basename(matchingImage.savedPath);
-      console.log(`📎 Found DOCX image: ${filename} (ID: ${imageId})`);
       return imageExtractor.getImageMarkdown('Document Image', filename);
     }
   }
@@ -447,7 +433,6 @@ async function extractImageFromRun(
     const img = extractedImages.find(img => img.savedPath);
     if (img) {
       const filename = path.basename(img.savedPath);
-      console.log(`📎 Using fallback DOCX image: ${filename}`);
       return imageExtractor.getImageMarkdown('Document Image', filename);
     }
   }

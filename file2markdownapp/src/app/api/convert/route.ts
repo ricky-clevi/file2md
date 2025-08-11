@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir, unlink, rmdir, rm } from 'fs/promises';
+import { writeFile, mkdir, unlink, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -65,16 +65,13 @@ export async function POST(request: NextRequest) {
     const tempDir = path.join(process.cwd(), 'temp');
     const outputDir = path.join(process.cwd(), 'public', 'downloads');
     
-    console.log('Creating directories:', { tempDir, outputDir });
     
     try {
       if (!existsSync(tempDir)) {
         await mkdir(tempDir, { recursive: true });
-        console.log('Created temp directory:', tempDir);
       }
       if (!existsSync(outputDir)) {
         await mkdir(outputDir, { recursive: true });
-        console.log('Created output directory:', outputDir);
       }
     } catch (error) {
       console.error('Failed to create directories:', error);
@@ -98,7 +95,6 @@ export async function POST(request: NextRequest) {
       
       // Convert file using file2md with enhanced options
       const imageDir = path.join(tempDir, `${fileId}-images`);
-      console.log('Image directory configured:', imageDir);
       
       const result = await convert(tempFilePath, {
         imageDir: imageDir,    // For legacy mode (DOCX, etc.)
@@ -107,17 +103,7 @@ export async function POST(request: NextRequest) {
         extractImages: extractImagesFlag,
         extractCharts: extractChartsFlag,
       });
-      
-      console.log('[DEBUG] Conversion result - images found:', result.images.length);
-      if (result.images.length > 0) {
-        console.log('[DEBUG] First few image paths:');
-        result.images.slice(0, 3).forEach((img, i) => {
-          console.log(`[DEBUG]   ${i + 1}: savedPath=${img.savedPath}, originalPath=${img.originalPath}`);
-        });
-        if (result.images.length > 3) {
-          console.log(`[DEBUG]   ... and ${result.images.length - 3} more images`);
-        }
-      }
+    
 
       const hasImages = result.images.length > 0;
       let downloadUrl: string;
@@ -134,8 +120,7 @@ export async function POST(request: NextRequest) {
         try {
           const publicImagesDir = path.join(outputDir, `${fileId}-images`, 'images');
           await mkdir(publicImagesDir, { recursive: true });
-          console.log(`[DEBUG] Creating public images mirror at: ${publicImagesDir}`);
-          console.log(`[DEBUG] Starting image copy loop for ${result.images.length} images`);
+
           
           for (const image of result.images) {
             const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
@@ -144,9 +129,7 @@ export async function POST(request: NextRequest) {
             try {
               // Check if source file exists before copying
               const fs = await import('fs/promises');
-              console.log(`[DEBUG] About to check file existence: ${savedPath}`);
               await fs.access(savedPath);
-              console.log(`[DEBUG] File exists, proceeding with copy: ${savedPath}`);
               
               const imageName = path.basename(savedPath);
               const dest = path.join(publicImagesDir, imageName);
@@ -154,33 +137,21 @@ export async function POST(request: NextRequest) {
               // Copy file for preview
               const fileBuffer = await fs.readFile(savedPath);
               await writeFile(dest, fileBuffer);
-              console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
             } catch (copyError) {
-              console.warn(`[DEBUG] Failed to copy image ${savedPath}:`, copyError);
               // Continue with other images instead of failing completely
             }
           }
           
-          console.log(`[DEBUG] Image copying loop completed for ${result.images.length} images`);
         } catch (mirrorErr) {
           console.warn('Failed to build public preview images mirror:', mirrorErr);
         }
 
-        // Now start ZIP creation (which will trigger cleanup after completion)
-        console.log(`[DEBUG] Starting ZIP creation with ${result.images.length} images`);
         await createZipFile(zipPath, result.markdown, originalName, [...result.images], tempFilePath, imageDir);
-        console.log(`[DEBUG] ZIP creation initiated`);
         downloadUrl = `/downloads/${filename}`;
         
         // Rewrite markdown image links for preview to point to public mirror
         const baseUrl = `/downloads/${fileId}-images/images/`;
-        console.log(`[DEBUG] Rewriting markdown image URLs to use base: ${baseUrl}`);
-        
-        // Log original markdown image references
-        const originalImageRefs = result.markdown.match(/!\[.*?\]\(images\/[^)]+\)/g) || [];
-        console.log(`[DEBUG] Original image references found: ${originalImageRefs.length}`);
-        originalImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
-        
+                
         // Enhanced replacement to handle various image reference formats
         // Also handle HTML img tags for better compatibility
         previewMarkdown = result.markdown
@@ -196,18 +167,12 @@ export async function POST(request: NextRequest) {
           if (src.startsWith('images/') || src.startsWith('./images/')) {
             const cleanSrc = src.replace(/^\.\/images\//, 'images/').replace(/^images\//, '');
             const fullUrl = `${baseUrl}${cleanSrc}`;
-            console.log(`[DEBUG] Rewriting image URL: ${src} -> ${fullUrl}`);
             return `![${alt}](${fullUrl})`;
           }
           return match;
         });
         
-        // Log rewritten markdown image references
-        const rewrittenImageRefs = previewMarkdown.match(/!\[.*?\]\([^)]+\)/g) || [];
-        console.log(`[DEBUG] Rewritten image references: ${rewrittenImageRefs.length}`);
-        rewrittenImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
         
-        console.log(`[DEBUG] Updated preview markdown with ${result.images.length} image references`);
       } else {
         // Save markdown file directly, ensure unique filename
         filename = `${originalName}__${fileId}.md`;
@@ -299,12 +264,9 @@ async function createZipFile(
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => {
-      console.log(`[DEBUG] ZIP creation completed, starting cleanup of temp files`);
-      console.log(`[DEBUG] Cleaning up: ${tempFilePath} and ${imageDir}`);
       // Clean up temporary files AFTER ZIP is complete
       cleanupTempFiles(tempFilePath, imageDir)
         .catch(err => console.warn('Cleanup error:', err));
-      console.log(`[DEBUG] Cleanup initiated`);
       resolve();
     });
     
@@ -320,9 +282,6 @@ async function createZipFile(
     // Add markdown file
     archive.append(markdown, { name: `${originalName}.md` });
 
-    // Add image files with path normalization and containment check
-    console.log(`ZIP creation: Processing ${images.length} images`);
-    
     for (const image of images) {
       try {
         const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
@@ -337,7 +296,6 @@ async function createZipFile(
 
         const imageName = path.basename(absImagePath);
         if (existsSync(absImagePath)) {
-          console.log(`Adding image to ZIP: ${imageName}`);
           archive.file(absImagePath, { name: `images/${imageName}` });
         } else {
           console.warn(`Image file not found: ${imageName}`);
@@ -353,23 +311,17 @@ async function createZipFile(
 
 async function cleanupTempFiles(tempFilePath: string, imageDir: string): Promise<void> {
   try {
-    console.log(`[DEBUG] cleanupTempFiles called for: ${tempFilePath} and ${imageDir}`);
     
     // Remove temp file
     if (existsSync(tempFilePath)) {
-      console.log(`[DEBUG] Deleting temp file: ${tempFilePath}`);
       await unlink(tempFilePath);
-      console.log(`[DEBUG] Temp file deleted: ${tempFilePath}`);
     }
 
     // Remove image directory and its contents using robust rm
     if (existsSync(imageDir)) {
-      console.log(`[DEBUG] Deleting image directory: ${imageDir}`);
       await rm(imageDir, { recursive: true, force: true });
-      console.log(`[DEBUG] Image directory deleted: ${imageDir}`);
     }
     
-    console.log(`[DEBUG] cleanupTempFiles completed successfully`);
   } catch (error) {
     console.warn('Cleanup error:', error);
     // Don't throw - cleanup errors shouldn't break the main flow

@@ -16,7 +16,7 @@ export interface PptxParseOptions {
   readonly preserveLayout?: boolean;
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
-  readonly useVisualParser?: boolean; // Enhanced visual parsing for better layout understanding
+  readonly useVisualParser?: boolean;
 }
 
 export interface PptxParseResult {
@@ -25,7 +25,7 @@ export interface PptxParseResult {
   readonly charts: readonly ChartData[];
   readonly slideCount: number;
   readonly metadata: Record<string, unknown>;
-  readonly visualLayouts?: readonly SlideLayout[]; // Enhanced visual information
+  readonly visualLayouts?: readonly SlideLayout[];
 }
 
 interface SlideFile {
@@ -73,7 +73,6 @@ async function parsePptxToMarkdown(
       const visualParser = new PptxVisualParser();
       const readonlyLayouts = await visualParser.parseVisualElements(buffer);
       visualLayouts = [...readonlyLayouts];
-      console.log(`Visual parser extracted ${visualLayouts.length} slide layouts`);
     } catch (visualError) {
       console.warn('Visual parsing failed, continuing with standard processing:', visualError);
     }
@@ -149,12 +148,9 @@ async function parsePptxToMarkdown(
         }
       }
       
-      // Debug: Log all elements found in this slide
-      console.log(`[DEBUG] Slide ${slideNumber} elements:`, layout.elements.map(e => e.type));
       
       // Process image elements and generate markdown references
       const imageElements = layout.elements.filter(e => e.type === 'image');
-      console.log(`[DEBUG] Slide ${slideNumber} found ${imageElements.length} image elements`);
       
       if (imageElements.length > 0) {
         markdown += '### Images\n\n';
@@ -162,11 +158,9 @@ async function parsePptxToMarkdown(
           if (element.type === 'image' && element.content) {
             const imageContent = element.content as { imagePath: string };
             const imagePath = imageContent.imagePath;
-            console.log(`[DEBUG] Processing image ${index + 1}: ${imagePath}`);
             
             // Try to get markdown reference using the image extractor
             const imageRef = imageExtractor.getImageReference(imagePath, 'ppt/');
-            console.log(`[DEBUG] Image reference from extractor: ${imageRef}`);
             
             if (imageRef) {
               markdown += `${imageRef}\n\n`;
@@ -176,22 +170,18 @@ async function parsePptxToMarkdown(
                 img.originalPath === imagePath ||
                 img.originalPath.endsWith(imagePath.split('/').pop() || '')
               );
-              console.log(`[DEBUG] Matching image found: ${matchingImage ? 'yes' : 'no'}`);
               
               if (matchingImage) {
                 const imageName = path.basename(matchingImage.savedPath);
                 markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
-                console.log(`[DEBUG] Generated image reference: ![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`);
               } else if (extractedImages.length > 0) {
                 // Try to use any available image from extracted images
                 const availableImage = extractedImages[Math.min(index, extractedImages.length - 1)];
                 const imageName = path.basename(availableImage.savedPath);
                 markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
-                console.log(`[DEBUG] Generated image reference using available image: ![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`);
               } else {
                 // Last resort: generic reference
                 markdown += `![Slide ${slideNumber} Image ${index + 1}](images/image_${slideNumber}_${index + 1}.png)\n\n`;
-                console.log(`[DEBUG] Generated fallback image reference`);
               }
             }
           }
@@ -200,7 +190,6 @@ async function parsePptxToMarkdown(
       
       // Process chart elements and potentially embedded images
       const chartElements = layout.elements.filter(e => e.type === 'chart');
-      console.log(`[DEBUG] Slide ${slideNumber} found ${chartElements.length} chart elements`);
       
       // Since visual parser misidentifies images as charts, let's embed images inline for slides with charts
       if (chartElements.length > 0) {
@@ -210,13 +199,11 @@ async function parsePptxToMarkdown(
         const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
         const slideImages = extractedImages.slice(startIndex, endIndex);
         
-        console.log(`[DEBUG] Slide ${slideNumber} embedding ${slideImages.length} images inline with charts (from index ${startIndex} to ${endIndex})`);
         
         // Embed images directly in the slide content, not in a separate section
         slideImages.forEach((image, index) => {
           const imageName = path.basename(image.savedPath);
           markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
-          console.log(`[DEBUG] Embedded inline image reference: ![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`);
         });
         
         // Process actual charts if any chart data is available
@@ -249,7 +236,6 @@ async function parsePptxToMarkdown(
       
       // Process table elements
       const tableElements = layout.elements.filter(e => e.type === 'table');
-      console.log(`[DEBUG] Slide ${slideNumber} found ${tableElements.length} table elements`);
       
       if (tableElements.length > 0) {
         markdown += '### Tables\n\n';
@@ -308,9 +294,6 @@ async function parsePptxToMarkdown(
         markdown += '*No content*\n\n';
       }
       
-      // Debug: Log when visual parser is not available
-      console.log(`[DEBUG] Slide ${slideNumber} using fallback XML parsing (no visual layouts)`);
-      
       // Embed images inline for this slide
       if (extractedImages.length > 0) {
         const imagesPerSlide = Math.ceil(extractedImages.length / slideFiles.length);
@@ -318,12 +301,10 @@ async function parsePptxToMarkdown(
         const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
         const fallbackSlideImages = extractedImages.slice(startIndex, endIndex);
         
-        console.log(`[DEBUG] Slide ${slideNumber} XML fallback: embedding ${fallbackSlideImages.length} images inline (from index ${startIndex} to ${endIndex})`);
         
         fallbackSlideImages.forEach((image, index) => {
           const imageName = path.basename(image.savedPath);
           markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
-          console.log(`[DEBUG] Generated XML fallback inline image reference: ![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`);
         });
       }
       
@@ -430,81 +411,3 @@ async function extractSlideTextContent(
   }
 }
 
-/**
- * Extract image references from slide XML when visual parser is not available
- * @deprecated This function is currently unused but kept for potential future use
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function extractSlideImages(
-  xmlContent: string,
-  slideNumber: number,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[]
-): Promise<string[]> {
-  try {
-    const result = await parseStringPromise(xmlContent);
-    const imageRefs: string[] = [];
-    
-    console.log(`[DEBUG] extractSlideImages: Processing slide ${slideNumber}`);
-    console.log(`[DEBUG] extractSlideImages: Found ${extractedImages.length} extracted images total`);
-    
-    // Extract picture elements from slide XML
-    const spTree = (result as { 'p:sld'?: { 'p:cSld'?: readonly { 'p:spTree'?: readonly { 'p:pic'?: readonly unknown[] }[] }[] } })?.['p:sld']?.['p:cSld']?.[0]?.['p:spTree']?.[0];
-    const pics = spTree?.['p:pic'];
-    
-    console.log(`[DEBUG] extractSlideImages: Found ${pics?.length || 0} picture elements in XML`);
-    
-    if (pics && Array.isArray(pics)) {
-      pics.forEach((pic, index) => {
-        try {
-          console.log(`[DEBUG] extractSlideImages: Processing picture ${index + 1}`);
-          
-          // Extract image reference from picture element
-          const blipFill = (pic as { 'p:blipFill'?: readonly { 'a:blip'?: readonly { $: { 'r:embed': string } }[] }[] })?.['p:blipFill']?.[0];
-          const blip = blipFill?.['a:blip']?.[0];
-          const rEmbed = blip?.$?.['r:embed'];
-          
-          console.log(`[DEBUG] extractSlideImages: rEmbed = ${rEmbed}`);
-          
-          if (rEmbed) {
-            // Try to get markdown reference using the image extractor
-            // Note: Without visual parser, we don't have the actual image path, so we use a generic approach
-            const matchingImage = extractedImages.find(img =>
-              img.originalPath.includes(rEmbed) ||
-              img.originalPath.includes(`slide${slideNumber}`)
-            );
-            
-            console.log(`[DEBUG] extractSlideImages: Matching image found: ${matchingImage ? 'yes' : 'no'}`);
-            
-            if (matchingImage) {
-              const imageName = path.basename(matchingImage.savedPath);
-              const imageRef = `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`;
-              imageRefs.push(imageRef);
-              console.log(`[DEBUG] extractSlideImages: Generated image reference: ${imageRef}`);
-            } else if (extractedImages.length > 0) {
-              // Try to use any available image
-              const availableImage = extractedImages[Math.min(index, extractedImages.length - 1)];
-              const imageName = path.basename(availableImage.savedPath);
-              const imageRef = `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})`;
-              imageRefs.push(imageRef);
-              console.log(`[DEBUG] extractSlideImages: Generated image reference using available image: ${imageRef}`);
-            } else {
-              // Fallback: use sequential image naming
-              const imageRef = `![Slide ${slideNumber} Image ${index + 1}](images/image_${slideNumber}_${index + 1}.png)`;
-              imageRefs.push(imageRef);
-              console.log(`[DEBUG] extractSlideImages: Generated fallback image reference: ${imageRef}`);
-            }
-          }
-        } catch (error) {
-          console.warn(`Error extracting image ${index} from slide ${slideNumber}:`, error);
-        }
-      });
-    }
-    
-    console.log(`[DEBUG] extractSlideImages: Returning ${imageRefs.length} image references`);
-    return imageRefs;
-  } catch (error) {
-    console.warn(`Error extracting images from slide ${slideNumber}:`, error);
-    return [];
-  }
-}

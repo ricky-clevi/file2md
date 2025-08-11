@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import ReactMarkdown from 'react-markdown';
@@ -300,19 +301,14 @@ export default function Home() {
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm]}
                       components={{
-                       img: ({ node, ...props }) => (
-                         <img
-                           {...props}
+                       img: ({...props }) => (
+                         <Image
+                           src={props.src as string}
                            style={{ maxWidth: '100%', height: 'auto', marginBottom: '1rem' }}
                            onError={(e) => {
-                             console.error('[DEBUG] Failed to load image:', props.src);
-                             console.error('[DEBUG] Image alt text:', props.alt);
-                             console.error('[DEBUG] Full image props:', props);
                              (e.target as HTMLImageElement).style.display = 'none';
                            }}
-                           onLoad={(e) => {
-                             console.log('[DEBUG] Successfully loaded image:', props.src);
-                           }}
+                           alt='Image from Markdown conversion'
                          />
                        )
                       }}

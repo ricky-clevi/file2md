@@ -159,8 +159,6 @@ export class PptxVisualParser {
       // Extract slide references
       const slideIds = this.extractSlideReferences(presentation);
       this.slideCount = slideIds.length;
-      
-      console.log(`Found ${this.slideCount} slides to parse`);
 
       // Load relationships and themes
       await this.loadRelationships();
@@ -173,7 +171,6 @@ export class PptxVisualParser {
         try {
           const slide = await this.parseSlide(slideId.id, slideId.rId, i + 1);
           slides.push(slide);
-          console.log(`Parsed slide ${i + 1}: ${slide.elements.length} elements`);
         } catch (slideError) {
           console.warn(`Failed to parse slide ${i + 1}:`, slideError);
           // Create a placeholder slide

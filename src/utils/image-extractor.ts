@@ -79,10 +79,7 @@ export class ImageExtractor {
   async saveImage(buffer: Buffer, originalPath: string, basePath: string = ''): Promise<string | null> {
     this.imageCounter++;
     const originalExt = path.extname(originalPath).toLowerCase() || '.png';
-    
-    console.log(`[DEBUG] Processing image: ${originalPath} with extension: ${originalExt}`);
-    console.log(`[DEBUG] Original buffer size: ${buffer.length} bytes`);
-    
+        
     let finalBuffer = buffer;
     let finalExt = originalExt;
     
@@ -90,49 +87,35 @@ export class ImageExtractor {
       // Check if we need to convert the image format
       if (WEB_COMPATIBLE_FORMATS.includes(originalExt)) {
         // Already web-compatible, use as-is
-        console.log(`[DEBUG] Image ${originalExt} is already web-compatible`);
       } else if (SHARP_CONVERTIBLE_FORMATS.includes(originalExt)) {
         // Convert using Sharp
-        console.log(`[DEBUG] Converting ${originalExt} to PNG using Sharp`);
-        finalBuffer = await this.convertImageToWebFormat(buffer, originalExt);
+        finalBuffer = await this.convertImageToWebFormat(buffer);
         finalExt = '.png';
       } else if (NON_CONVERTIBLE_FORMATS.includes(originalExt)) {
-        // WMF/EMF - save with PNG extension as fallback
-        console.log(`[DEBUG] ${originalExt} format detected - saving as PNG (browser fallback)`);
         finalExt = '.png';
-        // Keep original buffer but change extension - browsers might handle it
       } else {
-        // Unknown format - try to convert with Sharp
-        console.log(`[DEBUG] Unknown format ${originalExt} - attempting Sharp conversion`);
         try {
-          finalBuffer = await this.convertImageToWebFormat(buffer, originalExt);
+          finalBuffer = await this.convertImageToWebFormat(buffer);
           finalExt = '.png';
         } catch (conversionError: unknown) {
-          console.warn(`[DEBUG] Sharp conversion failed for ${originalExt}, using original buffer with PNG extension:`, conversionError instanceof Error ? conversionError.message : 'Unknown error');
+          console.warn(`Sharp conversion failed for ${originalExt}, using original buffer with PNG extension:`, conversionError instanceof Error ? conversionError.message : 'Unknown error');
           finalExt = '.png';
         }
       }
       
       const filename = `image_${this.imageCounter}${finalExt}`;
       const fullPath = path.join(this.outputDir, filename);
-      
-      console.log(`[DEBUG] Saving final image: ${filename}`);
-      console.log(`[DEBUG] Final buffer size: ${finalBuffer.length} bytes`);
-      
+            
       fs.writeFileSync(fullPath, finalBuffer);
       
       // Store mapping for reference lookup
       const key = basePath + originalPath;
       this.extractedImages.set(key, filename);
-      
-      console.log(`[DEBUG] Successfully saved converted image: ${filename}`);
-      console.log(`[DEBUG] Format conversion: ${originalExt} -> ${finalExt}`);
-      
+            
       // Return the full absolute path, not just the filename
       return path.resolve(fullPath);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[DEBUG] Failed to save/convert image: ${message}`);
       throw new ImageExtractionError(`Failed to save image: ${message}`, error as Error);
     }
   }
@@ -140,13 +123,11 @@ export class ImageExtractor {
   /**
    * Convert image buffer to web-compatible format using Sharp
    */
-  private async convertImageToWebFormat(buffer: Buffer, originalExt: string): Promise<Buffer> {
+  private async convertImageToWebFormat(buffer: Buffer): Promise<Buffer> {
     try {
       // Dynamic import Sharp to handle potential loading issues
       const sharp = await import('sharp');
-      
-      console.log(`[DEBUG] Using Sharp to convert ${originalExt} to PNG`);
-      
+            
       // Convert to PNG with good compression
       const convertedBuffer = await sharp.default(buffer)
         .png({
@@ -155,11 +136,9 @@ export class ImageExtractor {
         })
         .toBuffer();
         
-      console.log(`[DEBUG] Sharp conversion successful: ${buffer.length} bytes -> ${convertedBuffer.length} bytes`);
       return convertedBuffer;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[DEBUG] Sharp conversion failed: ${message}`);
       throw new ImageExtractionError(`Sharp conversion failed: ${message}`, error as Error);
     }
   }

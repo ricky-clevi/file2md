@@ -28,12 +28,9 @@ export async function parsePdf(
       pageCount = Math.min(pageCount, options.maxPages);
     }
     
-    // Try to extract embedded images from PDF
-    console.log('📎 Attempting to extract embedded images from PDF...');
     try {
       const embeddedImages = await extractEmbeddedImages(buffer, imageExtractor);
       if (embeddedImages.length > 0) {
-        console.log(`🎉 Found ${embeddedImages.length} embedded images in PDF`);
         images.push(...embeddedImages);
       }
     } catch (embeddedError: unknown) {
@@ -42,7 +39,6 @@ export async function parsePdf(
     
     // Try to extract text with enhanced layout
     if (data.text && data.text.trim()) {
-      console.log('📄 Extracting text with layout enhancement...');
       try {
         const enhancedText = await pdfExtractor.enhanceTextWithLayout(data.text, data);
         markdown += enhancedText;
@@ -65,7 +61,6 @@ export async function parsePdf(
     
     // If text is minimal or extraction failed, convert pages to images
     if (!data.text || data.text.trim().length < 100) {
-      console.log('📸 Converting PDF pages to images for better preservation...');
       try {
         const pageImages = await pdfExtractor.extractImagesFromPDF(buffer);
         if (pageImages.length > 0) {
@@ -138,7 +133,6 @@ async function extractEmbeddedImages(
     // In a future implementation, we could use libraries like pdf2pic or pdf-poppler
     // to extract individual images rather than converting entire pages
     
-    console.log('📎 PDF embedded image extraction is a placeholder - using page conversion fallback');
     return [];
   } catch (error: unknown) {
     console.warn('Failed to extract embedded PDF images:', error instanceof Error ? error.message : 'Unknown error');
@@ -160,7 +154,6 @@ async function embedImagesInContent(
   for (const [index, image] of images.entries()) {
     if (image.savedPath) {
       const filename = path.basename(image.savedPath);
-      console.log(`📎 Embedding PDF image: ${filename}`);
       imageMarkdown += imageExtractor.getImageMarkdown(`Image ${index + 1}`, filename);
       imageMarkdown += '\n\n';
     }
