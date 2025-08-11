@@ -12,15 +12,17 @@
   "dependencies": {
     "@types/archiver": "^6.0.3",
     "@types/multer": "^2.0.0",
+    "@types/sharp": "^0.31.1",
     "archiver": "^7.0.1",
-    "file2md": "^1.2.15",
+    "file2md": "^1.2.20",
     "multer": "^2.0.2",
     "next": "15.4.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-dropzone": "^14.3.8",
     "react-markdown": "^9.0.3",
-    "remark-gfm": "^4.0.0"
+    "remark-gfm": "^4.0.0",
+    "sharp": "^0.34.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

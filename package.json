@@ -1,6 +1,6 @@
 {
   "name": "file2md",
-  "version": "1.2.15",
+  "version": "1.2.20",
   "description": "A TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with image and layout preservation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -44,6 +44,7 @@
   },
   "homepage": "https://github.com/ricky-clevi/file2md#readme",
   "dependencies": {
+    "@types/sharp": "^0.31.1",
     "fast-xml-parser": "^4.3.2",
     "file-type": "^16.5.4",
     "hwp.js": "^0.0.3",
@@ -53,6 +54,7 @@
     "pdf2pic": "^2.1.4",
     "react-markdown": "^9.1.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.34.3",
     "xml2js": "^0.6.2"
   },
   "engines": {
