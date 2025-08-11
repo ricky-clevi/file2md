@@ -129,36 +129,48 @@ export async function POST(request: NextRequest) {
         filename = `${originalName}__${fileId}.zip`;
         const zipPath = path.join(outputDir, filename);
         
-        await createZipFile(zipPath, result.markdown, originalName, [...result.images], tempFilePath, imageDir);
-        downloadUrl = `/downloads/${filename}`;
-
         // Create a public images mirror for preview: /downloads/<fileId>-images/images/*
-      try {
-        const publicImagesDir = path.join(outputDir, `${fileId}-images`, 'images');
-        await mkdir(publicImagesDir, { recursive: true });
-        console.log(`[DEBUG] Creating public images mirror at: ${publicImagesDir}`);
-        
-        for (const image of result.images) {
-          const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
-          if (!savedPath) continue;
+        // IMPORTANT: Do this BEFORE ZIP creation to avoid race condition with cleanup
+        try {
+          const publicImagesDir = path.join(outputDir, `${fileId}-images`, 'images');
+          await mkdir(publicImagesDir, { recursive: true });
+          console.log(`[DEBUG] Creating public images mirror at: ${publicImagesDir}`);
+          console.log(`[DEBUG] Starting image copy loop for ${result.images.length} images`);
           
-          try {
-            // Check if source file exists before copying
-            const fs = await import('fs/promises');
-            await fs.access(savedPath);
+          for (const image of result.images) {
+            const savedPath = typeof image.savedPath === 'string' ? image.savedPath : '';
+            if (!savedPath) continue;
             
-            const imageName = path.basename(savedPath);
-            const dest = path.join(publicImagesDir, imageName);
-            
-            // Copy file for preview
-            const fileBuffer = await fs.readFile(savedPath);
-            await writeFile(dest, fileBuffer);
-            console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
-          } catch (copyError) {
-            console.warn(`[DEBUG] Failed to copy image ${savedPath}:`, copyError);
-            // Continue with other images instead of failing completely
+            try {
+              // Check if source file exists before copying
+              const fs = await import('fs/promises');
+              console.log(`[DEBUG] About to check file existence: ${savedPath}`);
+              await fs.access(savedPath);
+              console.log(`[DEBUG] File exists, proceeding with copy: ${savedPath}`);
+              
+              const imageName = path.basename(savedPath);
+              const dest = path.join(publicImagesDir, imageName);
+              
+              // Copy file for preview
+              const fileBuffer = await fs.readFile(savedPath);
+              await writeFile(dest, fileBuffer);
+              console.log(`[DEBUG] Copied image for preview: ${imageName} from ${savedPath} to ${dest}`);
+            } catch (copyError) {
+              console.warn(`[DEBUG] Failed to copy image ${savedPath}:`, copyError);
+              // Continue with other images instead of failing completely
+            }
           }
+          
+          console.log(`[DEBUG] Image copying loop completed for ${result.images.length} images`);
+        } catch (mirrorErr) {
+          console.warn('Failed to build public preview images mirror:', mirrorErr);
         }
+
+        // Now start ZIP creation (which will trigger cleanup after completion)
+        console.log(`[DEBUG] Starting ZIP creation with ${result.images.length} images`);
+        await createZipFile(zipPath, result.markdown, originalName, [...result.images], tempFilePath, imageDir);
+        console.log(`[DEBUG] ZIP creation initiated`);
+        downloadUrl = `/downloads/${filename}`;
         
         // Rewrite markdown image links for preview to point to public mirror
         const baseUrl = `/downloads/${fileId}-images/images/`;
@@ -196,9 +208,6 @@ export async function POST(request: NextRequest) {
         rewrittenImageRefs.forEach((ref, i) => console.log(`[DEBUG]   ${i + 1}: ${ref}`));
         
         console.log(`[DEBUG] Updated preview markdown with ${result.images.length} image references`);
-        } catch (mirrorErr) {
-          console.warn('Failed to build public preview images mirror:', mirrorErr);
-        }
       } else {
         // Save markdown file directly, ensure unique filename
         filename = `${originalName}__${fileId}.md`;
@@ -278,9 +287,9 @@ export async function POST(request: NextRequest) {
 }
 
 async function createZipFile(
-  zipPath: string, 
-  markdown: string, 
-  originalName: string, 
+  zipPath: string,
+  markdown: string,
+  originalName: string,
   images: { savedPath: string }[],
   tempFilePath: string,
   imageDir: string
@@ -290,9 +299,12 @@ async function createZipFile(
     const archive = archiver('zip', { zlib: { level: 9 } });
 
     output.on('close', () => {
+      console.log(`[DEBUG] ZIP creation completed, starting cleanup of temp files`);
+      console.log(`[DEBUG] Cleaning up: ${tempFilePath} and ${imageDir}`);
       // Clean up temporary files AFTER ZIP is complete
       cleanupTempFiles(tempFilePath, imageDir)
         .catch(err => console.warn('Cleanup error:', err));
+      console.log(`[DEBUG] Cleanup initiated`);
       resolve();
     });
     
@@ -341,15 +353,23 @@ async function createZipFile(
 
 async function cleanupTempFiles(tempFilePath: string, imageDir: string): Promise<void> {
   try {
+    console.log(`[DEBUG] cleanupTempFiles called for: ${tempFilePath} and ${imageDir}`);
+    
     // Remove temp file
     if (existsSync(tempFilePath)) {
+      console.log(`[DEBUG] Deleting temp file: ${tempFilePath}`);
       await unlink(tempFilePath);
+      console.log(`[DEBUG] Temp file deleted: ${tempFilePath}`);
     }
 
     // Remove image directory and its contents using robust rm
     if (existsSync(imageDir)) {
+      console.log(`[DEBUG] Deleting image directory: ${imageDir}`);
       await rm(imageDir, { recursive: true, force: true });
+      console.log(`[DEBUG] Image directory deleted: ${imageDir}`);
     }
+    
+    console.log(`[DEBUG] cleanupTempFiles completed successfully`);
   } catch (error) {
     console.warn('Cleanup error:', error);
     // Don't throw - cleanup errors shouldn't break the main flow
