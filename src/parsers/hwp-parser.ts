@@ -770,19 +770,22 @@ function convertHwpContentToMarkdown(textContent: string[]): string {
   filteredContent.forEach((paragraph, index) => {
     if (paragraph.trim().length === 0) return;
     
+    // Escape tilde characters to prevent strikethrough formatting in markdown
+    const escapedParagraph = paragraph.replace(/~/g, '\\~');
+    
     // Simple heuristics for formatting
-    if (paragraph.length < 50 && index === 0 && !paragraph.match(/^[0-9]+\./)) {
+    if (escapedParagraph.length < 50 && index === 0 && !escapedParagraph.match(/^[0-9]+\./)) {
       // Likely a title
-      markdown += `# ${paragraph}\n\n`;
-    } else if (paragraph.match(/^[0-9]+\./)) {
+      markdown += `# ${escapedParagraph}\n\n`;
+    } else if (escapedParagraph.match(/^[0-9]+\./)) {
       // Numbered list item
-      markdown += `${paragraph}\n`;
-    } else if (paragraph.match(/^[-•*]/)) {
+      markdown += `${escapedParagraph}\n`;
+    } else if (escapedParagraph.match(/^[-•*]/)) {
       // Bullet list item
-      markdown += `${paragraph}\n`;
+      markdown += `${escapedParagraph}\n`;
     } else {
       // Regular paragraph
-      markdown += `${paragraph}\n\n`;
+      markdown += `${escapedParagraph}\n\n`;
     }
   });
   
@@ -825,7 +828,9 @@ function smartJoinMarkdownParts(parts: string[]): string {
       }
     }
     
-    result.push(part);
+    // Escape tilde characters to prevent strikethrough formatting in markdown
+    const escapedPart = part.replace(/~/g, '\\~');
+    result.push(escapedPart);
   }
   
   return result.join('');

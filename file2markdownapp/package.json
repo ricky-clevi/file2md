@@ -13,7 +13,7 @@
     "@types/archiver": "^6.0.3",
     "@types/multer": "^2.0.0",
     "archiver": "^7.0.1",
-    "file2md": "^1.2.14",
+    "file2md": "^1.2.15",
     "multer": "^2.0.2",
     "next": "15.4.4",
     "react": "19.1.0",
