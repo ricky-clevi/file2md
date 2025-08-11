@@ -279,8 +279,9 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="grid lg:grid-cols-2 gap-6">
+              <div className="space-y-6">
                 <div className="bg-gray-50 rounded-lg p-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">File Conversion Details</h3>
                   <div className="text-sm text-gray-600 space-y-1">
                     <p><strong>File:</strong> {result.filename}</p>
                     <p><strong>Output:</strong> {result.hasImages ? 'ZIP (Markdown + Images)' : 'Markdown'}</p>
@@ -296,8 +297,8 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold text-gray-900">Markdown preview</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold text-gray-900">Markdown Preview</h3>
                     <button
                       onClick={handleDownload}
                       className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
@@ -305,7 +306,7 @@ export default function Home() {
                       Download {result.hasImages ? 'ZIP' : 'Markdown'}
                     </button>
                   </div>
-                  <div className="prose max-w-none text-left bg-white rounded-md p-3 border max-h-[50vh] overflow-auto">
+                  <div className="prose max-w-none text-left bg-white rounded-md p-4 border max-h-[60vh] overflow-auto">
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm]}
                       components={{
