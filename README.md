@@ -4,13 +4,15 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with **advanced layout preservation**, **image extraction**, **chart conversion**, and **Korean language support**.
+A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with **advanced layout preservation**, **real PDF image extraction**, **chart conversion**, and **Korean language support**.
+
+**English** | [한국어](README.ko.md)
 
 ## ✨ Features
 
 - 🔄 **Multiple Format Support**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
 - 🎨 **Layout Preservation**: Maintains document structure, tables, and formatting
-- 🖼️ **Image Extraction**: Automatically extracts and references images
+- 🖼️ **Real PDF Image Extraction**: Convert PDF pages to actual PNG images using pdf2pic
 - 📊 **Chart Conversion**: Converts charts to Markdown tables
 - 📝 **List & Table Support**: Proper nested lists and complex tables
 - 🌏 **Korean Language Support**: Full support for HWP/HWPX Korean document formats
@@ -137,8 +139,8 @@ interface ConversionResult {
 - ✅ **Table detection** and formatting
 - ✅ **List recognition** (bullets, numbers)
 - ✅ **Heading detection** (ALL CAPS, colons)
-- ✅ **Page-to-image fallback** for complex layouts
-- ✅ **Embedded image extraction** when available
+- ✅ **Real image extraction** using pdf2pic - converts PDF pages to PNG images
+- ✅ **Embedded image detection** and extraction
 
 ### 📝 DOCX
 - ✅ **Heading hierarchy** (H1-H6)
@@ -239,23 +241,6 @@ try {
 
 ## 🧪 Advanced Usage
 
-### Custom Error Handling
-
-```typescript
-import { convert, ConversionError } from 'file2md';
-
-try {
-  const result = await convert('./complex-document.docx');
-} catch (error) {
-  if (error instanceof ConversionError) {
-    console.error(`Conversion failed [${error.code}]:`, error.message);
-    if (error.originalError) {
-      console.error('Original error:', error.originalError);
-    }
-  }
-}
-```
-
 ### Batch Processing
 
 ```typescript
@@ -267,9 +252,12 @@ async function convertFolder(folderPath: string) {
   const results = [];
   
   for (const file of files) {
-    if (file.match(/\.(pdf|docx|xlsx|pptx)$/i)) {
+    if (file.match(/\.(pdf|docx|xlsx|pptx|hwp|hwpx)$/i)) {
       try {
-        const result = await convert(`${folderPath}/${file}`);
+        const result = await convert(`${folderPath}/${file}`, {
+          imageDir: 'batch-images',
+          extractImages: true
+        });
         results.push({ file, success: true, result });
       } catch (error) {
         results.push({ file, success: false, error });
@@ -281,64 +269,34 @@ async function convertFolder(folderPath: string) {
 }
 ```
 
-## 🏗️ Development
+### PDF Image Extraction Options
 
-### Build from Source
+```typescript
+import { convert } from 'file2md';
 
-```bash
-git clone https://github.com/yourusername/file2md.git
-cd file2md
-npm install
-npm run build
+// For image-heavy PDFs (scanned documents)
+const result = await convert('./scanned-document.pdf', {
+  imageDir: 'pdf-images',
+  maxPages: 10,          // Limit pages for large PDFs
+  extractImages: true    // Enable PDF-to-image conversion
+});
+
+console.log(`Extracted ${result.images.length} page images from PDF`);
 ```
 
-### Testing
-
-```bash
-npm test           # Run tests
-npm run test:watch # Watch mode
-npm run test:coverage # Coverage report
-```
-
-### Linting
-
-```bash
-npm run lint       # Check code style
-npm run lint:fix   # Fix issues
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🔗 Links
-
-- [npm package](https://www.npmjs.com/package/file2md)
-- [GitHub repository](https://github.com/yourusername/file2md)
-- [Issues & Bug Reports](https://github.com/yourusername/file2md/issues)
 
 ## 📊 Supported Formats
 
 | Format | Extension | Layout | Images | Charts | Tables | Lists |
 |--------|-----------|---------|---------|---------|---------|--------|
-| PDF    | `.pdf`    | ✅     | ✅*    | ❌     | ✅     | ✅    |
+| PDF    | `.pdf`    | ✅     | ✅     | ❌     | ✅     | ✅    |
 | Word   | `.docx`   | ✅     | ✅     | ✅     | ✅     | ✅    |
 | Excel  | `.xlsx`   | ✅     | ❌     | ✅     | ✅     | ❌    |
 | PowerPoint | `.pptx` | ✅   | ✅     | ✅     | ✅     | ❌    |
 | HWP    | `.hwp`    | ✅     | ✅     | ❌     | ❌     | ✅    |
 | HWPX   | `.hwpx`   | ✅     | ✅     | ❌     | ❌     | ✅    |
 
-*PDF images via page-to-image conversion or embedded extraction
+> **PDF Images**: Converts PDF pages to actual PNG images using pdf2pic library
 
 ## 🌏 Korean Document Support
 
@@ -378,9 +336,7 @@ for (const doc of koreanDocs) {
 }
 ```
 
-## 🔧 Advanced Configuration
-
-### Performance Optimization
+## 🔧 Performance & Configuration
 
 ```typescript
 import { convert } from 'file2md';
@@ -388,7 +344,7 @@ import { convert } from 'file2md';
 // Optimize for large documents
 const result = await convert('./large-document.pdf', {
   maxPages: 50,              // Limit PDF processing
-  extractImages: false,      // Disable images for speed
+  extractImages: true,       // Enable PDF image extraction
   preserveLayout: true       // Keep layout analysis
 });
 
@@ -399,41 +355,13 @@ const pptxResult = await convert('./presentation.pptx', {
   extractCharts: true,       // Extract chart data
   extractImages: true        // Extract embedded images
 });
-```
 
-### Error Handling for Korean Documents
-
-```typescript
-import { convert, ParseError } from 'file2md';
-
-try {
-  const result = await convert('./korean-document.hwp');
-  console.log('Korean document converted successfully');
-} catch (error) {
-  if (error instanceof ParseError) {
-    console.error(`Failed to parse ${error.format} document:`, error.message);
-    // Handle Korean-specific parsing errors
-    if (error.format === 'HWP' || error.format === 'HWPX') {
-      console.log('Try converting to HWPX format for better compatibility');
-    }
-  }
-}
-```
-
-## 📈 Performance Metrics
-
-The library provides detailed performance metrics in the metadata:
-
-```typescript
-const result = await convert('./document.docx');
-
+// Performance metrics are available in metadata
 console.log('Performance Metrics:');
 console.log(`- Processing time: ${result.metadata.processingTime}ms`);
 console.log(`- Pages processed: ${result.metadata.pageCount}`);
 console.log(`- Images extracted: ${result.metadata.imageCount}`);
-console.log(`- Charts found: ${result.metadata.chartCount}`);
 console.log(`- File type: ${result.metadata.fileType}`);
-console.log(`- MIME type: ${result.metadata.mimeType}`);
 ```
 
 ## 🤝 Contributing
@@ -466,18 +394,6 @@ npm run build
 npm run lint
 ```
 
-### Testing Korean Documents
-
-When testing Korean document support:
-
-```bash
-# Run specific tests for Korean formats
-npm test -- --testNamePattern="HWP"
-
-# Run with coverage for Korean parsers
-npm run test:coverage -- --collectCoverageFrom="src/parsers/hwp-*.ts"
-```
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -487,9 +403,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [npm package](https://www.npmjs.com/package/file2md)
 - [GitHub repository](https://github.com/ricky-clevi/file2md)
 - [Issues & Bug Reports](https://github.com/ricky-clevi/file2md/issues)
-- [Korean Document Format Info](https://www.hancom.com/)
 
 ---
 
-**Made with ❤️ and TypeScript**
-**🇰🇷 Enhanced with Korean document support**
+**Made with ❤️ and TypeScript** • **🖼️ Enhanced with real PDF image extraction** • **🇰🇷 Korean document support**
