@@ -1,6 +1,6 @@
 {
   "name": "file2md",
-  "version": "1.2.24",
+  "version": "1.4.34",
   "description": "A TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with image and layout preservation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,7 +15,12 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
     "prepublishOnly": "npm run clean && npm run build && npm test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "node scripts/publish.js",
+    "release:dry": "node scripts/publish.js --dry-run",
+    "release:retry": "node scripts/publish.js --skip-increment",
+    "version:increment": "node scripts/increment-version.js",
+    "auth:check": "node scripts/setup-auth.js"
   },
   "keywords": [
     "markdown",
