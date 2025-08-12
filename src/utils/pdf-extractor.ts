@@ -39,7 +39,7 @@ export class PDFExtractor {
    */
   async extractImagesFromPDF(buffer: Buffer): Promise<readonly PageData[]> {
     try {
-      console.log('🖼️ PDFExtractor: Using pdf2pic for image extraction...');
+      console.log('🖼️ PDFExtractor: Using pdf-to-img for image extraction...');
       
       // Parse the PDF to get basic information
       const pdfParse = await import('pdf-parse');
@@ -61,8 +61,9 @@ export class PDFExtractor {
             return extractedPages;
           }
         } catch (pdf2picError: unknown) {
-          console.warn('⚠️ pdf2pic extraction failed:', pdf2picError instanceof Error ? pdf2picError.message : 'Unknown error');
-          // Fall back to placeholder creation only if pdf2pic fails
+          console.warn('⚠️ pdf-to-img extraction failed:', pdf2picError instanceof Error ? pdf2picError.message : 'Unknown error');
+          
+          // Fall back to placeholder creation if pdf-to-img fails
           return await this.createPlaceholders(pdfData.numpages);
         }
       } else {
@@ -79,51 +80,42 @@ export class PDFExtractor {
   }
 
   /**
-   * Convert PDF pages to images using pdf2pic
+   * Convert PDF pages to images using pdf-to-img (pure JavaScript solution)
    */
   private async convertPDFToImages(buffer: Buffer, maxPages: number = 3): Promise<PageData[]> {
     try {
-      const { fromBuffer } = await import('pdf2pic');
+      // Use pdf-to-img for pure JavaScript PDF-to-image conversion
+      const { pdf } = await import('pdf-to-img');
       
-      console.log(`🔄 Converting PDF to images (max ${maxPages} pages)...`);
+      console.log(`🔄 Converting PDF to images (max ${maxPages} pages) using pdf-to-img...`);
       
       const extractedPages: PageData[] = [];
       
-      // Convert each page individually to have more control
-      for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+      // Convert PDF buffer to images - pdf-to-img returns an AsyncGenerator
+      let pageNumber = 0;
+      for await (const image of pdf(buffer, { scale: 2.0 })) {
+        pageNumber++;
+        
+        if (pageNumber > maxPages) break;
+        
         try {
-          // Configure pdf2pic options for this specific page
-          const convertOptions = {
-            format: 'png' as const,
-            out_dir: this.imageExtractor.imageDirectory,
-            out_prefix: `pdf_page_${pageNumber}`,
-            page: pageNumber
-          };
+          // pdf-to-img returns image buffers directly
+          const filename = `pdf_page_${pageNumber}.png`;
           
-          // Convert single page from buffer
-          const convert = fromBuffer(buffer, convertOptions);
-          const result = await convert(pageNumber, true); // true for returning base64
+          // Save using image extractor to ensure proper naming and location
+          const savedPath = await this.imageExtractor.saveImage(image, filename);
           
-          if (result && 'base64' in result && result.base64) {
-            // Convert base64 to buffer
-            const imageBuffer = Buffer.from(result.base64, 'base64');
-            const filename = `pdf_page_${pageNumber}.png`;
-            
-            // Save the image using the image extractor
-            const savedPath = await this.imageExtractor.saveImage(imageBuffer, filename);
-            
-            if (savedPath) {
-              extractedPages.push({
-                pageNumber,
-                imagePath: path.basename(savedPath),
-                fullPath: savedPath,
-                dimensions: {
-                  width: 800, // Default dimensions since pdf2pic doesn't always provide them
-                  height: 600
-                }
-              });
-              console.log(`✅ Converted page ${pageNumber} to image`);
-            }
+          if (savedPath) {
+            extractedPages.push({
+              pageNumber,
+              imagePath: path.basename(savedPath),
+              fullPath: savedPath,
+              dimensions: {
+                width: 800, // pdf-to-img doesn't provide exact dimensions
+                height: 600
+              }
+            });
+            console.log(`✅ Converted page ${pageNumber} to image using JavaScript`);
           }
         } catch (pageError: unknown) {
           console.warn(`⚠️ Failed to convert page ${pageNumber}:`, pageError instanceof Error ? pageError.message : 'Unknown error');
@@ -135,9 +127,10 @@ export class PDFExtractor {
         throw new Error('No pages could be converted to images');
       }
       
+      console.log(`🎉 Successfully converted ${extractedPages.length} pages to images using JavaScript`);
       return extractedPages;
     } catch (error: unknown) {
-      console.error('❌ pdf2pic conversion failed:', error instanceof Error ? error.message : 'Unknown error');
+      console.error('❌ pdf-to-img conversion failed:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }
@@ -146,28 +139,84 @@ export class PDFExtractor {
    * Create placeholder files as fallback when pdf2pic fails
    */
   private async createPlaceholders(pageCount: number): Promise<PageData[]> {
-    console.log('📝 Creating placeholders as fallback...');
+    console.log('📝 Creating image placeholders as fallback...');
     
     const extractedPages: PageData[] = [];
     const maxPages = Math.min(pageCount, 3);
     
     for (let page = 1; page <= maxPages; page++) {
-      const placeholderContent = `PDF Page ${page} Image Placeholder\n\nThis page appears to contain primarily image content.\nUnable to extract actual image - pdf2pic conversion failed.\n\nPage ${page} of ${pageCount}`;
-      const placeholderBuffer = Buffer.from(placeholderContent, 'utf-8');
-      
-      // Save placeholder as a text file
-      const filename = `pdf_page_${page}_placeholder.txt`;
-      
-      // Use the image extractor to save the placeholder
-      const savedPath = await this.imageExtractor.saveImage(placeholderBuffer, filename);
-      
-      if (savedPath) {
-        extractedPages.push({
-          pageNumber: page,
-          imagePath: path.basename(savedPath),
-          fullPath: savedPath
-        });
-        console.log(`✅ Created placeholder for page ${page}`);
+      try {
+        // Create a simple placeholder image using Sharp
+        const sharp = await import('sharp');
+        
+        // Create a 800x600 placeholder image with text
+        const placeholderImage = await sharp.default({
+          create: {
+            width: 800,
+            height: 600,
+            channels: 4,
+            background: { r: 240, g: 240, b: 240, alpha: 1 }
+          }
+        })
+        .png()
+        .composite([
+          {
+            input: Buffer.from(
+              `<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+                <rect width="800" height="600" fill="#f0f0f0" stroke="#ccc" stroke-width="2"/>
+                <text x="400" y="250" text-anchor="middle" font-family="Arial" font-size="24" fill="#666">PDF Page ${page}</text>
+                <text x="400" y="290" text-anchor="middle" font-family="Arial" font-size="16" fill="#888">Image extraction failed</text>
+                <text x="400" y="320" text-anchor="middle" font-family="Arial" font-size="16" fill="#888">Page ${page} of ${pageCount}</text>
+                <text x="400" y="360" text-anchor="middle" font-family="Arial" font-size="14" fill="#aaa">Install GraphicsMagick for better PDF support</text>
+              </svg>`
+            ),
+            top: 0,
+            left: 0,
+          }
+        ])
+        .toBuffer();
+        
+        const filename = `pdf_page_${page}_placeholder.png`;
+        
+        // Use the image extractor to save the placeholder
+        const savedPath = await this.imageExtractor.saveImage(placeholderImage, filename);
+        
+        if (savedPath) {
+          extractedPages.push({
+            pageNumber: page,
+            imagePath: path.basename(savedPath),
+            fullPath: savedPath,
+            dimensions: {
+              width: 800,
+              height: 600
+            }
+          });
+          console.log(`✅ Created image placeholder for page ${page}`);
+        }
+      } catch (sharpError: unknown) {
+        console.warn(`⚠️ Failed to create image placeholder for page ${page}:`, sharpError instanceof Error ? sharpError.message : 'Unknown error');
+        
+        // Fallback to simple text-based approach without Sharp conversion
+        const filename = `pdf_page_${page}_info.txt`;
+        const placeholderContent = `PDF Page ${page} - Image extraction failed\n\nPage ${page} of ${pageCount}\n\nInstall GraphicsMagick for better PDF image support.`;
+        const placeholderBuffer = Buffer.from(placeholderContent, 'utf-8');
+        
+        // Save directly without image conversion
+        const fs = await import('fs/promises');
+        const fullPath = path.join(this.imageExtractor.imageDirectory, filename);
+        
+        try {
+          await fs.writeFile(fullPath, placeholderBuffer);
+          
+          extractedPages.push({
+            pageNumber: page,
+            imagePath: filename,
+            fullPath: path.resolve(fullPath)
+          });
+          console.log(`✅ Created text placeholder for page ${page}`);
+        } catch (writeError: unknown) {
+          console.warn(`⚠️ Failed to write placeholder for page ${page}:`, writeError instanceof Error ? writeError.message : 'Unknown error');
+        }
       }
     }
     

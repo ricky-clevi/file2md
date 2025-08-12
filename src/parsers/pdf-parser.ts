@@ -69,7 +69,7 @@ export async function parsePdf(
           for (const page of pageImages) {
             images.push({
               originalPath: `page_${page.pageNumber}`,
-              savedPath: page.imagePath,
+              savedPath: page.fullPath || page.imagePath,
               basePath: '',
               format: 'png',
               dimensions: page.dimensions
@@ -151,7 +151,7 @@ async function extractEmbeddedImages(
         console.log(`🎉 PDFExtractor successfully extracted ${extractedImages.length} images`);
         return extractedImages.map(page => ({
           originalPath: `pdf_page_${page.pageNumber}.png`,
-          savedPath: page.imagePath,
+          savedPath: page.fullPath || page.imagePath,
           basePath: 'pdf/',
           format: 'png',
           dimensions: page.dimensions

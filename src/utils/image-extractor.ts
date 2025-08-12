@@ -103,7 +103,10 @@ export class ImageExtractor {
         }
       }
       
-      const filename = `image_${this.imageCounter}${finalExt}`;
+      // Use the provided filename if it has an extension, otherwise generate one
+      const providedName = path.basename(originalPath);
+      const hasExtension = path.extname(providedName);
+      const filename = hasExtension ? providedName : `image_${this.imageCounter}${finalExt}`;
       const fullPath = path.join(this.outputDir, filename);
             
       fs.writeFileSync(fullPath, finalBuffer);
