@@ -5,7 +5,6 @@
  * 
  * This script:
  * 1. Increments the patch version in the root package.json
- * 2. Updates the file2md dependency version in file2markdownapp/package.json
  */
 
 import fs from 'node:fs';
@@ -17,7 +16,6 @@ const __dirname = path.dirname(__filename);
 
 // Paths to package.json files
 const rootPackagePath = path.join(__dirname, '..', 'package.json');
-const appPackagePath = path.join(__dirname, '..', 'file2markdownapp', 'package.json');
 
 /**
  * Increment the patch version (x.y.z -> x.y.(z+1))
@@ -77,10 +75,6 @@ async function main() {
       throw new Error(`Root package.json not found at: ${rootPackagePath}`);
     }
     
-    if (!fs.existsSync(appPackagePath)) {
-      throw new Error(`App package.json not found at: ${appPackagePath}`);
-    }
-    
     // Read current root package version
     const rootPackageContent = fs.readFileSync(rootPackagePath, 'utf8');
     const rootPackageData = JSON.parse(rootPackageContent);
@@ -95,15 +89,8 @@ async function main() {
     // Update root package.json
     updatePackageVersion(rootPackagePath, newVersion);
     
-    // Update file2markdownapp package.json dependency
-    updatePackageVersion(appPackagePath, null, {
-      name: 'file2md',
-      version: newVersion
-    });
-    
     console.log('✅ Version increment completed successfully!');
     console.log(`📦 Root package: ${currentVersion} → ${newVersion}`);
-    console.log(`📱 App dependency: file2md ^${newVersion}`);
     
   } catch (error) {
     console.error('❌ Version increment failed:', error.message);

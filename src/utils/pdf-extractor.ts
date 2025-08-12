@@ -91,19 +91,18 @@ export class PDFExtractor {
       
       const extractedPages: PageData[] = [];
       
-      // Convert PDF buffer to images - pdf-to-img returns an AsyncGenerator
-      let pageNumber = 0;
-      for await (const image of pdf(buffer, { scale: 2.0 })) {
-        pageNumber++;
-        
-        if (pageNumber > maxPages) break;
-        
+      // Convert PDF buffer to images - pdf-to-img converts and provides document object
+      const pdfDocument = await pdf(buffer, { scale: 2.0 });
+      
+      // Extract pages up to maxPages
+      for (let pageNumber = 1; pageNumber <= Math.min(pdfDocument.length, maxPages); pageNumber++) {
         try {
-          // pdf-to-img returns image buffers directly
+          // Get the page image buffer
+          const imageBuffer = await pdfDocument.getPage(pageNumber);
           const filename = `pdf_page_${pageNumber}.png`;
           
           // Save using image extractor to ensure proper naming and location
-          const savedPath = await this.imageExtractor.saveImage(image, filename);
+          const savedPath = await this.imageExtractor.saveImage(imageBuffer, filename);
           
           if (savedPath) {
             extractedPages.push({
