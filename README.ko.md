@@ -4,7 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-다양한 문서 형식(PDF, DOCX, XLSX, PPTX, HWP, HWPX)을 **고급 레이아웃 보존**, **실제 PDF 이미지 추출**, **차트 변환**, **한국어 문서 지원** 기능과 함께 마크다운으로 변환하는 현대적인 TypeScript 라이브러리입니다.
+다양한 문서 형식(PDF, DOCX, XLSX, PPTX, HWP, HWPX)을 **고급 레이아웃 보존**, **이미지 추출**, **차트 변환**, **한국어 문서 지원** 기능과 함께 마크다운으로 변환하는 현대적인 TypeScript 라이브러리입니다.
 
 [English](README.md) | **한국어**
 
@@ -12,14 +12,14 @@
 
 - 🔄 **다양한 형식 지원**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
 - 🎨 **레이아웃 보존**: 문서 구조, 표, 서식 유지
-- 🖼️ **실제 PDF 이미지 추출**: pdf2pic을 사용하여 PDF 페이지를 실제 PNG 이미지로 변환
+- 🖼️ **이미지 추출**: DOCX, PPTX, XLSX, HWP 문서에서 포함된 이미지 추출
 - 📊 **차트 변환**: 차트를 마크다운 표로 변환
 - 📝 **목록 및 표 지원**: 중첩된 목록과 복잡한 표 지원
 - 🌏 **한국어 문서 지원**: HWP/HWPX 한국어 문서 형식 완전 지원
 - 🔒 **타입 안전성**: 포괄적인 타입을 제공하는 완전한 TypeScript 지원
 - ⚡ **현대적 ESM**: CommonJS 호환성을 갖춘 ES2022 모듈
 - 🚀 **무설정**: 별도 설정 없이 바로 사용 가능
-- 🎯 **시각적 파싱**: 향상된 PPTX 파싱 및 시각적 레이아웃 분석
+- 📄 **PDF 텍스트 추출**: 레이아웃 감지가 포함된 향상된 텍스트 추출
 
 ## 📦 설치
 
@@ -43,13 +43,13 @@ const result = await convert('./presentation.pptx', {
   imageDir: 'extracted-images',
   preserveLayout: true,
   extractCharts: true,
-  useVisualParser: true // 향상된 PPTX 파싱
+  extractImages: true
 });
 
 console.log(`✅ 변환 완료!`);
 console.log(`📄 마크다운 길이: ${result.markdown.length}`);
 console.log(`🖼️ 추출된 이미지: ${result.images.length}`);
-console.log(`📊 발견된 차트: ${result.charts.length}`);
+console.log(`📊 찾은 차트: ${result.charts.length}`);
 console.log(`⏱️ 처리 시간: ${result.metadata.processingTime}ms`);
 ```
 
@@ -73,7 +73,7 @@ const hwpxResult = await convert('./document.hwpx', {
 });
 
 console.log(`🇰🇷 HWP 내용: ${hwpResult.markdown.substring(0, 100)}...`);
-console.log(`📄 HWPX 페이지: ${hwpResult.metadata.pageCount}`);
+console.log(`📄 HWPX 페이지 수: ${hwpResult.metadata.pageCount}`);
 ```
 
 ### CommonJS
@@ -111,13 +111,12 @@ const result = await convert(buffer, {
 
 ```typescript
 interface ConvertOptions {
-  imageDir?: string;        // 추출된 이미지 디렉터리 (기본값: 'images')
-  outputDir?: string;       // 슬라이드 스크린샷 출력 디렉터리 (PPTX용, imageDir로 폴백)
+  imageDir?: string;        // 추출된 이미지를 위한 디렉터리 (기본값: 'images')
+  outputDir?: string;       // 슬라이드 스크린샷을 위한 출력 디렉터리 (PPTX, imageDir로 fallback)
   preserveLayout?: boolean; // 문서 레이아웃 유지 (기본값: true)
   extractCharts?: boolean;  // 차트를 표로 변환 (기본값: true)
-  extractImages?: boolean;  // 임베디드 이미지 추출 (기본값: true)
-  maxPages?: number;        // PDF 최대 페이지 수 (기본값: 무제한)
-  useVisualParser?: boolean; // PPTX용 향상된 시각적 파싱 (기본값: true)
+  extractImages?: boolean;  // 포함된 이미지 추출 (기본값: true)
+  maxPages?: number;        // PDF의 최대 페이지 수 (기본값: 무제한)
 }
 ```
 
@@ -125,68 +124,66 @@ interface ConvertOptions {
 
 ```typescript
 interface ConversionResult {
-  markdown: string;           // 생성된 마크다운 콘텐츠
+  markdown: string;           // 생성된 마크다운 내용
   images: ImageData[];        // 추출된 이미지 정보
   charts: ChartData[];        // 추출된 차트 데이터
   metadata: DocumentMetadata; // 처리 정보가 포함된 문서 메타데이터
 }
 ```
 
-## 🎯 형식별 세부 기능
+## 🎯 형식별 특화 기능
 
 ### 📄 PDF
 - ✅ **텍스트 추출** 및 레이아웃 향상
 - ✅ **표 감지** 및 서식 지정
 - ✅ **목록 인식** (글머리 기호, 번호)
-- ✅ **제목 감지** (모든 대문자, 콜론)
-- ✅ **실제 이미지 추출** pdf2pic 사용 - PDF 페이지를 PNG 이미지로 변환
-- ✅ **임베디드 이미지 감지** 및 추출
+- ✅ **제목 감지** (대문자, 콜론)
+- ❌ **이미지 추출** (텍스트 전용 처리)
 
 ### 📝 DOCX
-- ✅ **제목 계층 구조** (H1-H6)
+- ✅ **제목 계층** (H1-H6)
 - ✅ **텍스트 서식** (굵게, 기울임꼴)
-- ✅ **복잡한 표** 병합된 셀 포함
-- ✅ **중첩된 목록** 적절한 들여쓰기 포함
-- ✅ **임베디드 이미지** 및 차트
+- ✅ **복잡한 표** 및 병합된 셀
+- ✅ **중첩된 목록** 및 적절한 들여쓰기
+- ✅ **포함된 이미지** 및 차트
 - ✅ **셀 스타일링** (정렬, 색상)
 - ✅ **글꼴 크기 보존** 및 서식
 
 ### 📊 XLSX
-- ✅ **여러 워크시트** 별도 섹션으로 구분
+- ✅ **여러 워크시트**를 별도 섹션으로
 - ✅ **셀 서식** (굵게, 색상, 정렬)
 - ✅ **데이터 타입 보존**
-- ✅ **차트 추출** 데이터 표로 변환
-- ✅ **조건부 서식** 메모
-- ✅ **공유 문자열** 대용량 파일 처리
+- ✅ **차트 추출**을 데이터 표로
+- ✅ **조건부 서식** 노트
+- ✅ **공유 문자열** 처리 (대용량 파일)
 
 ### 🎬 PPTX
 - ✅ **슬라이드별** 구성
-- ✅ **텍스트 위치 지정** 및 레이아웃
-- ✅ **슬라이드별 이미지 배치**
-- ✅ **슬라이드에서 표 추출**
-- ✅ **다중 열 레이아웃**
-- ✅ **향상된 레이아웃 분석을 통한 시각적 파싱**
-- ✅ **문서 속성에서 제목 추출**
-- ✅ **차트 및 이미지** 인라인 임베딩
+- ✅ **텍스트 위치** 및 레이아웃
+- ✅ **슬라이드별 이미지** 배치
+- ✅ **슬라이드에서 표** 추출
+- ✅ **다중 컬럼 레이아웃**
+- ✅ **문서 속성에서 제목** 추출
+- ✅ **차트 및 이미지** 인라인 삽입
 
-### 🇰🇷 HWP (한국어)
-- ✅ **바이너리 형식** hwp.js를 사용한 파싱
-- ✅ **한국어 텍스트 추출** 적절한 인코딩 포함
-- ✅ **임베디드 콘텐츠에서 이미지 추출**
-- ✅ **한국어 문서용 레이아웃 보존**
-- ✅ **저작권 메시지 필터링** 깔끔한 출력
+### 🇰🇷 HWP (한글)
+- ✅ **이진 형식** hwp.js를 사용한 파싱
+- ✅ **한국어 텍스트 추출** 및 적절한 인코딩
+- ✅ **포함된 내용에서 이미지** 추출
+- ✅ **한국어 문서를 위한 레이아웃** 보존
+- ✅ **저작권 메시지 필터링**으로 깔끔한 출력
 
-### 🇰🇷 HWPX (한국어 XML)
+### 🇰🇷 HWPX (한글 XML)
 - ✅ **XML 기반 형식** JSZip을 사용한 파싱
-- ✅ **대용량 문서용 다중 섹션 지원**
-- ✅ **이미지 참조용 관계 매핑**
+- ✅ **대용량 문서를 위한 다중 섹션** 지원
+- ✅ **이미지 참조를 위한 관계 매핑**
 - ✅ **OWPML 구조** 파싱
 - ✅ **향상된 한국어 텍스트** 처리
-- ✅ **ZIP 아카이브에서 BinData 이미지 추출**
+- ✅ **ZIP 아카이브에서 BinData 이미지** 추출
 
 ## 🖼️ 이미지 처리
 
-이미지는 자동으로 추출되어 지정된 디렉터리에 저장됩니다:
+이미지는 지정된 디렉터리에 자동으로 추출되고 저장됩니다:
 
 ```typescript
 const result = await convert('./presentation.pptx', {
@@ -199,21 +196,23 @@ const result = await convert('./presentation.pptx', {
 // ├── image_2.jpg
 // └── chart_1.png
 
-// 마크다운에 포함될 내용:
-// ![Slide 1 Image](my-images/image_1.png)
+// 마크다운에는 다음이 포함됩니다:
+// ![슬라이드 1 이미지](my-images/image_1.png)
 ```
+
+**참고:** PDF 파일은 텍스트 전용으로 처리됩니다. 필요시 전용 PDF 도구를 사용하여 이미지를 추출하세요.
 
 ## 📊 차트 변환
 
 차트는 마크다운 표로 변환됩니다:
 
 ```markdown
-#### Chart 1: 매출 데이터
+#### 차트 1: 판매 데이터
 
 | 카테고리 | 1분기 | 2분기 | 3분기 | 4분기 |
 | --- | --- | --- | --- | --- |
 | 매출 | 100 | 150 | 200 | 250 |
-| 수익 | 20 | 30 | 45 | 60 |
+| 이익 | 20 | 30 | 45 | 60 |
 ```
 
 ## 🛡️ 오류 처리
@@ -230,11 +229,11 @@ try {
   const result = await convert('./document.pdf');
 } catch (error) {
   if (error instanceof UnsupportedFormatError) {
-    console.error('지원하지 않는 파일 형식입니다');
+    console.error('지원하지 않는 파일 형식');
   } else if (error instanceof FileNotFoundError) {
-    console.error('파일을 찾을 수 없습니다');
+    console.error('파일을 찾을 수 없음');
   } else if (error instanceof ParseError) {
-    console.error('문서 파싱에 실패했습니다:', error.message);
+    console.error('문서 파싱 실패:', error.message);
   }
 }
 ```
@@ -269,46 +268,57 @@ async function convertFolder(folderPath: string) {
 }
 ```
 
-### PDF 이미지 추출 옵션
+### 대용량 문서 처리
 
 ```typescript
 import { convert } from 'file2md';
 
-// 이미지 중심 PDF용 (스캔된 문서)
-const result = await convert('./scanned-document.pdf', {
-  imageDir: 'pdf-images',
-  maxPages: 10,          // 대용량 PDF용 페이지 제한
-  extractImages: true    // PDF-이미지 변환 활성화
+// 대용량 문서 최적화
+const result = await convert('./large-document.pdf', {
+  maxPages: 50,              // PDF 처리 제한
+  preserveLayout: true       // 레이아웃 분석 유지
 });
 
-console.log(`PDF에서 ${result.images.length}개의 페이지 이미지를 추출했습니다`);
+// 향상된 PPTX 처리
+const pptxResult = await convert('./presentation.pptx', {
+  outputDir: 'slides',       // 슬라이드를 위한 별도 디렉터리
+  extractCharts: true,       // 차트 데이터 추출
+  extractImages: true        // 포함된 이미지 추출
+});
+
+// 성능 메트릭은 메타데이터에서 확인 가능
+console.log('성능 메트릭:');
+console.log(`- 처리 시간: ${result.metadata.processingTime}ms`);
+console.log(`- 처리된 페이지: ${result.metadata.pageCount}`);
+console.log(`- 추출된 이미지: ${result.metadata.imageCount}`);
+console.log(`- 파일 타입: ${result.metadata.fileType}`);
 ```
 
-## 📊 지원 형식
+## 📊 지원되는 형식
 
 | 형식 | 확장자 | 레이아웃 | 이미지 | 차트 | 표 | 목록 |
-|------|-------|---------|-------|------|----|----|
-| PDF    | `.pdf`    | ✅     | ✅     | ❌     | ✅     | ✅    |
-| Word   | `.docx`   | ✅     | ✅     | ✅     | ✅     | ✅    |
-| Excel  | `.xlsx`   | ✅     | ❌     | ✅     | ✅     | ❌    |
-| PowerPoint | `.pptx` | ✅   | ✅     | ✅     | ✅     | ❌    |
-| HWP    | `.hwp`    | ✅     | ✅     | ❌     | ❌     | ✅    |
-| HWPX   | `.hwpx`   | ✅     | ✅     | ❌     | ❌     | ✅    |
+|------|--------|----------|---------|------|-----|------|
+| PDF  | `.pdf` | ✅      | ❌     | ❌   | ✅  | ✅   |
+| Word | `.docx`| ✅      | ✅     | ✅   | ✅  | ✅   |
+| Excel| `.xlsx`| ✅      | ❌     | ✅   | ✅  | ❌   |
+| PowerPoint| `.pptx`| ✅   | ✅     | ✅   | ✅  | ❌   |
+| HWP  | `.hwp` | ✅      | ✅     | ❌   | ❌  | ✅   |
+| HWPX | `.hwpx`| ✅      | ✅     | ❌   | ❌  | ✅   |
 
-> **PDF 이미지**: pdf2pic 라이브러리를 사용하여 PDF 페이지를 실제 PNG 이미지로 변환
+> **참고**: PDF 처리는 향상된 레이아웃 감지를 통한 텍스트 추출에 중점을 둡니다. PDF 이미지 추출이 필요한 경우 전용 PDF 처리 도구 사용을 고려하세요.
 
 ## 🌏 한국어 문서 지원
 
-file2md는 한국어 문서 형식에 대한 포괄적인 지원을 제공합니다:
+file2md는 한국어 문서 형식에 대한 포괄적인 지원을 포함합니다:
 
 ### HWP (한글)
-- 한글 워드프로세서에서 사용하는 **바이너리 형식**
+- 한글 (Hangul) 워드 프로세서에서 사용하는 **이진 형식**
 - 한국 조직에서 여전히 널리 사용되는 **레거시 형식**
 - 한국어 문자 인코딩을 통한 **완전한 텍스트 추출**
 - **이미지 및 차트** 추출 지원
 
 ### HWPX (한글 XML)
-- HWP의 후속작인 **현대적인 XML 기반** 형식
+- HWP의 후속 버전인 **현대적인 XML 기반** 형식
 - XML 콘텐츠 파일을 포함한 **ZIP 아카이브 구조**
 - 관계 매핑을 통한 **향상된 파싱**
 - **다중 섹션** 및 복잡한 문서 지원
@@ -318,8 +328,8 @@ file2md는 한국어 문서 형식에 대한 포괄적인 지원을 제공합니
 ```typescript
 // 한국어 문서 변환
 const koreanDocs = [
-  'report.hwp',      // 레거시 바이너리 형식
-  'document.hwpx',   // 현대적 XML 형식
+  'report.hwp',      // 레거시 이진 형식
+  'document.hwpx',   // 현대적인 XML 형식
   'presentation.pptx'
 ];
 
@@ -331,52 +341,35 @@ for (const doc of koreanDocs) {
   
   console.log(`📄 ${doc}: ${result.markdown.length} 문자`);
   console.log(`🖼️ 이미지: ${result.images.length}`);
-  console.log(`⏱️ ${result.metadata.processingTime}ms에 처리 완료`);
+  console.log(`⏱️ 처리 시간: ${result.metadata.processingTime}ms`);
 }
 ```
 
-## 🔧 성능 및 설정
+## 🔧 성능 및 구성
 
-```typescript
-import { convert } from 'file2md';
+라이브러리는 합리적인 기본값으로 성능에 최적화되어 있습니다:
 
-// 대용량 문서 최적화
-const result = await convert('./large-document.pdf', {
-  maxPages: 50,              // PDF 처리 페이지 제한
-  extractImages: true,       // PDF 이미지 추출 활성화
-  preserveLayout: true       // 레이아웃 분석 유지
-});
+- **무설정** - 별도 설정 없이 바로 사용
+- **효율적인 처리** - 다양한 문서 크기에 최적화
+- **메모리 관리** - 임시 리소스의 적절한 정리
+- **타입 안전성** - 완전한 TypeScript 지원
 
-// 향상된 PPTX 처리
-const pptxResult = await convert('./presentation.pptx', {
-  useVisualParser: true,     // 시각적 레이아웃 분석 활성화
-  outputDir: 'slides',       // 슬라이드용 별도 디렉터리
-  extractCharts: true,       // 차트 데이터 추출
-  extractImages: true        // 임베디드 이미지 추출
-});
-
-// 메타데이터에서 성능 지표 확인 가능
-console.log('성능 지표:');
-console.log(`- 처리 시간: ${result.metadata.processingTime}ms`);
-console.log(`- 처리된 페이지: ${result.metadata.pageCount}`);
-console.log(`- 추출된 이미지: ${result.metadata.imageCount}`);
-console.log(`- 파일 타입: ${result.metadata.fileType}`);
-```
+성능 메트릭은 모니터링 및 최적화를 위해 변환 결과에 포함됩니다.
 
 ## 🤝 기여하기
 
-기여를 환영합니다! 언제든 풀 리퀘스트를 제출해 주세요.
+기여를 환영합니다! 언제든지 Pull Request를 제출해주세요.
 
-1. 저장소를 포크합니다
-2. 기능 브랜치를 생성합니다 (`git checkout -b feature/amazing-feature`)
-3. 변경 사항을 커밋합니다 (`git commit -m 'Add amazing feature'`)
-4. 브랜치에 푸시합니다 (`git push origin feature/amazing-feature`)
-5. 풀 리퀘스트를 엽니다
+1. 저장소 포크
+2. 기능 브랜치 생성 (`git checkout -b feature/amazing-feature`)
+3. 변경사항 커밋 (`git commit -m 'Add amazing feature'`)
+4. 브랜치에 푸시 (`git push origin feature/amazing-feature`)
+5. Pull Request 열기
 
 ### 개발 환경 설정
 
 ```bash
-# 저장소 복제
+# 저장소 클론
 git clone https://github.com/ricky-clevi/file2md.git
 cd file2md
 
@@ -393,9 +386,9 @@ npm run build
 npm run lint
 ```
 
-## 📄 라이센스
+## 📄 라이선스
 
-이 프로젝트는 MIT 라이센스에 따라 라이센스가 부여됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+이 프로젝트는 MIT 라이선스 하에 라이선스됩니다 - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
 
 ## 🔗 링크
 
@@ -405,4 +398,4 @@ npm run lint
 
 ---
 
-**❤️와 TypeScript로 제작** • **🖼️ 실제 PDF 이미지 추출 기능 향상** • **🇰🇷 한국어 문서 지원**
+**❤️와 TypeScript로 제작** • **🖼️ 지능적 문서 파싱으로 향상** • **🇰🇷 한국어 문서 지원**

@@ -4,7 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with **advanced layout preservation**, **real PDF image extraction**, **chart conversion**, and **Korean language support**.
+A modern TypeScript library for converting various document types (PDF, DOCX, XLSX, PPTX, HWP, HWPX) into Markdown with **advanced layout preservation**, **image extraction**, **chart conversion**, and **Korean language support**.
 
 **English** | [한국어](README.ko.md)
 
@@ -12,14 +12,14 @@ A modern TypeScript library for converting various document types (PDF, DOCX, XL
 
 - 🔄 **Multiple Format Support**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
 - 🎨 **Layout Preservation**: Maintains document structure, tables, and formatting
-- 🖼️ **Real PDF Image Extraction**: Convert PDF pages to actual PNG images using pdf2pic
+- 🖼️ **Image Extraction**: Extract embedded images from DOCX, PPTX, XLSX, HWP documents
 - 📊 **Chart Conversion**: Converts charts to Markdown tables
 - 📝 **List & Table Support**: Proper nested lists and complex tables
 - 🌏 **Korean Language Support**: Full support for HWP/HWPX Korean document formats
 - 🔒 **Type Safety**: Full TypeScript support with comprehensive types
 - ⚡ **Modern ESM**: ES2022 modules with CommonJS compatibility
 - 🚀 **Zero Config**: Works out of the box
-- 🎯 **Visual Parsing**: Enhanced PPTX parsing with visual layout analysis
+- 📄 **PDF Text Extraction**: Enhanced text extraction with layout detection
 
 ## 📦 Installation
 
@@ -43,7 +43,7 @@ const result = await convert('./presentation.pptx', {
   imageDir: 'extracted-images',
   preserveLayout: true,
   extractCharts: true,
-  useVisualParser: true // Enhanced PPTX parsing
+  extractImages: true
 });
 
 console.log(`✅ Converted successfully!`);
@@ -66,7 +66,7 @@ const hwpResult = await convert('./document.hwp', {
 });
 
 // Convert Korean HWPX document (XML-based format)
-const hwpxResult = await convert('./document.hwp', {
+const hwpxResult = await convert('./document.hwpx', {
   imageDir: 'hwpx-images',
   preserveLayout: true,
   extractImages: true
@@ -117,7 +117,6 @@ interface ConvertOptions {
   extractCharts?: boolean;  // Convert charts to tables (default: true)
   extractImages?: boolean;  // Extract embedded images (default: true)
   maxPages?: number;        // Max pages for PDFs (default: unlimited)
-  useVisualParser?: boolean; // Enhanced visual parsing for PPTX (default: true)
 }
 ```
 
@@ -139,8 +138,7 @@ interface ConversionResult {
 - ✅ **Table detection** and formatting
 - ✅ **List recognition** (bullets, numbers)
 - ✅ **Heading detection** (ALL CAPS, colons)
-- ✅ **Real image extraction** using pdf2pic - converts PDF pages to PNG images
-- ✅ **Embedded image detection** and extraction
+- ❌ **Image extraction** (text-only processing)
 
 ### 📝 DOCX
 - ✅ **Heading hierarchy** (H1-H6)
@@ -165,7 +163,6 @@ interface ConversionResult {
 - ✅ **Image placement** per slide
 - ✅ **Table extraction** from slides
 - ✅ **Multi-column layouts**
-- ✅ **Visual parsing** with enhanced layout analysis
 - ✅ **Title extraction** from document properties
 - ✅ **Chart and image** inline embedding
 
@@ -202,6 +199,8 @@ const result = await convert('./presentation.pptx', {
 // Markdown will contain:
 // ![Slide 1 Image](my-images/image_1.png)
 ```
+
+**Note:** PDF files are processed as text-only. Use dedicated PDF tools for image extraction if needed.
 
 ## 📊 Chart Conversion
 
@@ -269,34 +268,44 @@ async function convertFolder(folderPath: string) {
 }
 ```
 
-### PDF Image Extraction Options
+### Large Document Processing
 
 ```typescript
 import { convert } from 'file2md';
 
-// For image-heavy PDFs (scanned documents)
-const result = await convert('./scanned-document.pdf', {
-  imageDir: 'pdf-images',
-  maxPages: 10,          // Limit pages for large PDFs
-  extractImages: true    // Enable PDF-to-image conversion
+// Optimize for large documents
+const result = await convert('./large-document.pdf', {
+  maxPages: 50,              // Limit PDF processing
+  preserveLayout: true       // Keep layout analysis
 });
 
-console.log(`Extracted ${result.images.length} page images from PDF`);
-```
+// Enhanced PPTX processing
+const pptxResult = await convert('./presentation.pptx', {
+  outputDir: 'slides',       // Separate directory for slides
+  extractCharts: true,       // Extract chart data
+  extractImages: true        // Extract embedded images
+});
 
+// Performance metrics are available in metadata
+console.log('Performance Metrics:');
+console.log(`- Processing time: ${result.metadata.processingTime}ms`);
+console.log(`- Pages processed: ${result.metadata.pageCount}`);
+console.log(`- Images extracted: ${result.metadata.imageCount}`);
+console.log(`- File type: ${result.metadata.fileType}`);
+```
 
 ## 📊 Supported Formats
 
 | Format | Extension | Layout | Images | Charts | Tables | Lists |
 |--------|-----------|---------|---------|---------|---------|--------|
-| PDF    | `.pdf`    | ✅     | ✅     | ❌     | ✅     | ✅    |
+| PDF    | `.pdf`    | ✅     | ❌     | ❌     | ✅     | ✅    |
 | Word   | `.docx`   | ✅     | ✅     | ✅     | ✅     | ✅    |
 | Excel  | `.xlsx`   | ✅     | ❌     | ✅     | ✅     | ❌    |
 | PowerPoint | `.pptx` | ✅   | ✅     | ✅     | ✅     | ❌    |
 | HWP    | `.hwp`    | ✅     | ✅     | ❌     | ❌     | ✅    |
 | HWPX   | `.hwpx`   | ✅     | ✅     | ❌     | ❌     | ✅    |
 
-> **PDF Images**: Converts PDF pages to actual PNG images using pdf2pic library
+> **Note**: PDF processing focuses on text extraction with enhanced layout detection. For PDF image extraction, consider using dedicated PDF processing tools.
 
 ## 🌏 Korean Document Support
 
@@ -338,31 +347,14 @@ for (const doc of koreanDocs) {
 
 ## 🔧 Performance & Configuration
 
-```typescript
-import { convert } from 'file2md';
+The library is optimized for performance with sensible defaults:
 
-// Optimize for large documents
-const result = await convert('./large-document.pdf', {
-  maxPages: 50,              // Limit PDF processing
-  extractImages: true,       // Enable PDF image extraction
-  preserveLayout: true       // Keep layout analysis
-});
+- **Zero configuration** - Works out of the box
+- **Efficient processing** - Optimized for various document sizes
+- **Memory management** - Proper cleanup of temporary resources
+- **Type safety** - Full TypeScript support
 
-// Enhanced PPTX processing
-const pptxResult = await convert('./presentation.pptx', {
-  useVisualParser: true,     // Enable visual layout analysis
-  outputDir: 'slides',       // Separate directory for slides
-  extractCharts: true,       // Extract chart data
-  extractImages: true        // Extract embedded images
-});
-
-// Performance metrics are available in metadata
-console.log('Performance Metrics:');
-console.log(`- Processing time: ${result.metadata.processingTime}ms`);
-console.log(`- Pages processed: ${result.metadata.pageCount}`);
-console.log(`- Images extracted: ${result.metadata.imageCount}`);
-console.log(`- File type: ${result.metadata.fileType}`);
-```
+Performance metrics are included in the conversion result for monitoring and optimization.
 
 ## 🤝 Contributing
 
@@ -406,4 +398,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Made with ❤️ and TypeScript** • **🖼️ Enhanced with real PDF image extraction** • **🇰🇷 Korean document support**
+**Made with ❤️ and TypeScript** • **🖼️ Enhanced with intelligent document parsing** • **🇰🇷 Korean document support**
