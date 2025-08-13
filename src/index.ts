@@ -142,7 +142,7 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
 
     switch (detectedType.mime as SupportedMimeType) {
       case SUPPORTED_MIME_TYPES.PDF: {
-        const result = await parsePdf(buffer, imageExtractor, { maxPages, preserveLayout });
+        const result = await parsePdf(buffer, { maxPages, preserveLayout });
         markdown = result.markdown;
         images = result.images || [];
         pageCount = result.pageCount || 1;
