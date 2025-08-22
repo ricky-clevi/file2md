@@ -17,6 +17,7 @@ export interface PptxParseOptions {
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
   readonly useVisualParser?: boolean;
+  readonly outputDir?: string;
 }
 
 export interface PptxParseResult {
@@ -65,6 +66,7 @@ async function parsePptxToMarkdown(
   options: PptxParseOptions
 ): Promise<PptxParseResult> {
   const zip = await JSZip.loadAsync(buffer);
+  const outputDir = options.outputDir ?? imageExtractor.imageDirectory;
   
   // Enhanced visual parsing if requested (for text extraction)
   let visualLayouts: SlideLayout[] | undefined;
@@ -173,15 +175,16 @@ async function parsePptxToMarkdown(
               
               if (matchingImage) {
                 const imageName = path.basename(matchingImage.savedPath);
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
+                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
               } else if (extractedImages.length > 0) {
                 // Try to use any available image from extracted images
                 const availableImage = extractedImages[Math.min(index, extractedImages.length - 1)];
                 const imageName = path.basename(availableImage.savedPath);
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
+                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
               } else {
                 // Last resort: generic reference
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](images/image_${slideNumber}_${index + 1}.png)\n\n`;
+                const fallbackName = `image_${slideNumber}_${index + 1}.png`;
+                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, fallbackName)})\n\n`;
               }
             }
           }
@@ -203,7 +206,7 @@ async function parsePptxToMarkdown(
         // Embed images directly in the slide content, not in a separate section
         slideImages.forEach((image, index) => {
           const imageName = path.basename(image.savedPath);
-          markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
+          markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
         });
         
         // Process actual charts if any chart data is available
@@ -295,18 +298,18 @@ async function parsePptxToMarkdown(
       }
       
       // Embed images inline for this slide
-      if (extractedImages.length > 0) {
-        const imagesPerSlide = Math.ceil(extractedImages.length / slideFiles.length);
-        const startIndex = (slideNumber - 1) * imagesPerSlide;
-        const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
-        const fallbackSlideImages = extractedImages.slice(startIndex, endIndex);
-        
-        
-        fallbackSlideImages.forEach((image, index) => {
-          const imageName = path.basename(image.savedPath);
-          markdown += `![Slide ${slideNumber} Image ${index + 1}](images/${imageName})\n\n`;
-        });
-      }
+        if (extractedImages.length > 0) {
+          const imagesPerSlide = Math.ceil(extractedImages.length / slideFiles.length);
+          const startIndex = (slideNumber - 1) * imagesPerSlide;
+          const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
+          const fallbackSlideImages = extractedImages.slice(startIndex, endIndex);
+
+
+          fallbackSlideImages.forEach((image, index) => {
+            const imageName = path.basename(image.savedPath);
+            markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
+          });
+        }
       
       // Add fallback chart processing for when visual parser is not available
       if (extractedCharts.length > 0) {
