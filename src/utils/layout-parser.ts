@@ -185,9 +185,9 @@ export class LayoutParser {
   /**
    * Create multi-column layout approximation - only for genuine multi-column content
    */
-  createColumns(columns: readonly ColumnData[]): string {
+  createColumns(columns?: readonly ColumnData[]): string {
     if (!columns || columns.length <= 1) {
-      return columns[0]?.content || '';
+      return columns?.[0]?.content || '';
     }
 
     // Be much more conservative - only create columns if there's substantial content
