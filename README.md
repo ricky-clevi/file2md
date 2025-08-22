@@ -75,7 +75,7 @@ const hwpxResult = await convert('./document.hwpx', {
 });
 
 console.log(`🇰🇷 HWP content: ${hwpResult.markdown.substring(0, 100)}...`);
-console.log(`📄 HWPX pages: ${hwpResult.metadata.pageCount}`);
+console.log(`📄 HWPX pages: ${hwpxResult.metadata.pageCount}`);
 ```
 
 ### CommonJS
