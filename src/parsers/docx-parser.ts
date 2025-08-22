@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
+import { parseStringPromise, type ParserOptions } from 'xml2js';
 import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
@@ -84,23 +84,23 @@ export async function parseDocx(
   
     
     // Try parsing with different options to handle namespaces
-    const parseOptions = {
+    const parseOptions: ParserOptions = {
       explicitCharkey: false,
       trim: true,
       normalize: true,
       explicitRoot: true,  // Keep the root element
-      emptyTag: null as any,
+      emptyTag: () => null,
       explicitChildren: false,
       charsAsChildren: false,
       includeWhiteChars: false,
       mergeAttrs: false,
-      attrNameProcessors: [] as any[],
-      attrValueProcessors: [] as any[],
-      tagNameProcessors: [] as any[],
-      valueProcessors: [] as any[]
+      attrNameProcessors: [],
+      attrValueProcessors: [],
+      tagNameProcessors: [],
+      valueProcessors: []
     };
-    
-    const result = await parseStringPromise(xmlContent, parseOptions) as any;
+
+    const result = await parseStringPromise(xmlContent, parseOptions) as Record<string, unknown>;
     
     // Handle both array and non-array XML parsing results
     // The structure should be: result['w:document'] -> document element
@@ -111,7 +111,12 @@ export async function parseDocx(
       document = Array.isArray(result['w:document']) ? result['w:document'][0] : result['w:document'];
     } else if (result['w:body']) {
       // If w:body is at the top level (no document wrapper), create a synthetic document
-      document = { 'w:body': Array.isArray(result['w:body']) ? result['w:body'] as any : [result['w:body']] };
+      const bodyNode = result['w:body'];
+      document = {
+        'w:body': Array.isArray(bodyNode)
+          ? (bodyNode as [DocxBody])
+          : [bodyNode as DocxBody]
+      };
     } else {
       // Check if document exists under a different key
       throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
