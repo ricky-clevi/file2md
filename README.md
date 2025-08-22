@@ -12,7 +12,7 @@ A modern TypeScript library for converting various document types (PDF, DOCX, XL
 
 - 🔄 **Multiple Format Support**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
 - 🎨 **Layout Preservation**: Maintains document structure, tables, and formatting
-- 🖼️ **Image Extraction**: Extract embedded images from DOCX, PPTX, XLSX, HWP documents
+- 🖼️ **Image Extraction**: Extract embedded images from DOCX, PPTX, HWP documents
 - 📊 **Chart Conversion**: Converts charts to Markdown tables
 - 📝 **List & Table Support**: Proper nested lists and complex tables
 - 🌏 **Korean Language Support**: Full support for HWP/HWPX Korean document formats
@@ -20,6 +20,8 @@ A modern TypeScript library for converting various document types (PDF, DOCX, XL
 - ⚡ **Modern ESM**: ES2022 modules with CommonJS compatibility
 - 🚀 **Zero Config**: Works out of the box
 - 📄 **PDF Text Extraction**: Enhanced text extraction with layout detection
+
+> **Note**: XLSX image extraction is planned but not yet supported.
 
 ## 📦 Installation
 
