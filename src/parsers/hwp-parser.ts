@@ -7,16 +7,20 @@ import { Buffer } from 'node:buffer';
 import { setupBrowserPolyfills } from '../utils/browser-polyfills.js';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
-import { ParseError } from '../types/errors.js';
+import { ParseError, SecurityError } from '../types/errors.js';
 import type { 
   ImageData, 
-  ChartData
+  ChartData,
+  ConvertOptions
 } from '../types/interfaces.js';
+import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
+import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
 
 export interface HwpParseOptions {
   readonly preserveLayout?: boolean;
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
+  readonly options?: ConvertOptions;
 }
 
 export interface HwpParseResult {
@@ -328,7 +332,31 @@ async function parseHwpxXml(
   options: HwpParseOptions
 ): Promise<HwpParseResult> {
   try {
+    // Create secure ZIP extractor if security options are provided
+    let secureExtractor: SecureZipExtractor | undefined;
+    if (options.options) {
+      const securityConfig = createZipSecurityConfig(options.options);
+      secureExtractor = new SecureZipExtractor(securityConfig);
+    }
+
     const zip = await JSZip.loadAsync(buffer);
+    
+    // Validate ZIP archive for security if extractor is available
+    if (secureExtractor) {
+      try {
+        await secureExtractor.validate(zip);
+      } catch (error) {
+        if (error instanceof SecurityError) {
+          throw new SecurityError(
+            `HWPX security validation failed: ${error.message}`,
+            error.securityCode,
+            error.severity,
+            error
+          );
+        }
+        throw error;
+      }
+    }
     
     // Log all files in the ZIP for debugging
     const allFiles = Object.keys(zip.files);
@@ -398,7 +426,7 @@ async function parseHwpxXml(
     
     // Extract images from ZIP if requested (do this before parsing to pass images to parser)
     const images = options.extractImages !== false ? 
-      await extractHwpxImages(zip, imageExtractor) : [];
+      await extractHwpxImages(zip, imageExtractor, options.options) : [];
 
     // Build relationships map for all content files we will parse
     const relContentFiles = sectionFiles.length > 0 ? sectionFiles.sort() : [contentFileName];
@@ -699,7 +727,8 @@ async function extractHwpImages(
  */
 async function extractHwpxImages(
   zip: JSZip,
-  imageExtractor: ImageExtractor
+  imageExtractor: ImageExtractor,
+  securityOptions?: ConvertOptions
 ): Promise<ImageData[]> {
   const images: ImageData[] = [];
   

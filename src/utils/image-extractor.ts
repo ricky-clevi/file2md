@@ -3,8 +3,14 @@ import path from 'node:path';
 import type JSZip from 'jszip';
 import type { Buffer } from 'node:buffer';
 
-import type { ImageData } from '../types/interfaces.js';
-import { ImageExtractionError } from '../types/errors.js';
+import type { ImageData, ConvertOptions } from '../types/interfaces.js';
+import { ImageExtractionError, SecurityError } from '../types/errors.js';
+import { 
+  SecureZipExtractor, 
+  createZipSecurityConfig, 
+  sanitizeFilename,
+  validateFilePath 
+} from './zip-security.js';
 
 // Web-compatible image formats
 const WEB_COMPATIBLE_FORMATS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'];
@@ -33,7 +39,29 @@ export class ImageExtractor {
   /**
    * Extract images from a ZIP archive (DOCX, XLSX, PPTX)
    */
-  async extractImagesFromZip(zip: JSZip, basePath: string = ''): Promise<readonly ImageData[]> {
+  async extractImagesFromZip(
+    zip: JSZip, 
+    basePath: string = '', 
+    options?: ConvertOptions
+  ): Promise<readonly ImageData[]> {
+    // Create secure ZIP extractor
+    const securityConfig = createZipSecurityConfig(options || {});
+    const secureExtractor = new SecureZipExtractor(securityConfig);
+    
+    // Validate ZIP archive first
+    try {
+      await secureExtractor.validate(zip);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        console.warn(`ZIP security validation failed: ${error.message}`);
+        throw new ImageExtractionError(
+          `Archive failed security validation: ${error.message}`,
+          error
+        );
+      }
+      throw error;
+    }
+    
     const images: {
       path: string;
       file: JSZip.JSZipObject;
@@ -41,6 +69,12 @@ export class ImageExtractor {
     }[] = [];
     
     zip.forEach((relativePath, file) => {
+      // Skip if path is not safe
+      if (!secureExtractor.isPathSafe(relativePath)) {
+        console.warn(`Skipping unsafe path: ${relativePath}`);
+        return;
+      }
+      
       // Check for image files in common locations
       if (this.isImageFile(relativePath)) {
         images.push({
@@ -54,8 +88,11 @@ export class ImageExtractor {
     const extractedImages: ImageData[] = [];
     for (const img of images) {
       try {
-        const imageData = await img.file.async('nodebuffer');
-        const savedPath = await this.saveImage(imageData, img.path, img.basePath);
+        // Use secure extraction
+        const imageData = await secureExtractor.extractFile(img.file, img.path);
+        // Sanitize filename for security
+        const sanitizedPath = secureExtractor.sanitizeFilename(img.path);
+        const savedPath = await this.saveImage(imageData, sanitizedPath, img.basePath);
         if (savedPath) {
           extractedImages.push({
             originalPath: img.path,

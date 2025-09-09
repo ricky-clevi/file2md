@@ -6,11 +6,14 @@ import type { Buffer } from 'node:buffer';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
 import { PptxVisualParser, type SlideLayout } from '../utils/pptx-visual-parser.js';
-import { ParseError } from '../types/errors.js';
+import { ParseError, SecurityError } from '../types/errors.js';
 import type { 
   ImageData, 
-  ChartData
+  ChartData,
+  ConvertOptions
 } from '../types/interfaces.js';
+import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
+import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
 
 export interface PptxParseOptions {
   readonly preserveLayout?: boolean;
@@ -18,6 +21,7 @@ export interface PptxParseOptions {
   readonly extractCharts?: boolean;
   readonly useVisualParser?: boolean;
   readonly outputDir?: string;
+  readonly options?: ConvertOptions;
 }
 
 export interface PptxParseResult {
@@ -65,7 +69,32 @@ async function parsePptxToMarkdown(
   chartExtractor: ChartExtractor,
   options: PptxParseOptions
 ): Promise<PptxParseResult> {
+  // Create secure ZIP extractor if security options are provided
+  let secureExtractor: SecureZipExtractor | undefined;
+  if (options.options) {
+    const securityConfig = createZipSecurityConfig(options.options);
+    secureExtractor = new SecureZipExtractor(securityConfig);
+  }
+
   const zip = await JSZip.loadAsync(buffer);
+  
+  // Validate ZIP archive for security if extractor is available
+  if (secureExtractor) {
+    try {
+      await secureExtractor.validate(zip);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        throw new SecurityError(
+          `PPTX security validation failed: ${error.message}`,
+          error.securityCode,
+          error.severity,
+          error
+        );
+      }
+      throw error;
+    }
+  }
+  
   const outputDir = options.outputDir ?? imageExtractor.imageDirectory;
   
   // Enhanced visual parsing if requested (for text extraction)
@@ -82,12 +111,12 @@ async function parsePptxToMarkdown(
   
   // Extract embedded images metadata only (not for slide screenshots)
   const extractedImages = options.extractImages !== false 
-    ? await imageExtractor.extractImagesFromZip(zip, 'ppt/')
+    ? await imageExtractor.extractImagesFromZip(zip, 'ppt/', options.options)
     : [];
   
   // Extract charts if enabled
   const extractedCharts = options.extractCharts !== false
-    ? await chartExtractor.extractChartsFromZip(zip, 'ppt/')
+    ? await chartExtractor.extractChartsFromZip(zip, 'ppt/', options.options)
     : [];
   
   const slideFiles: SlideFile[] = [];
@@ -107,7 +136,7 @@ async function parsePptxToMarkdown(
   });
   
   // Extract title from PPTX metadata
-  const title = await extractPptxTitle(buffer);
+  const title = await extractPptxTitle(buffer, options.options);
   
   let markdown = '';
   
@@ -142,7 +171,7 @@ async function parsePptxToMarkdown(
       } else {
         // Fallback to XML extraction if no text in visual layout
         const xmlContent = await slideFile.file.async('string');
-        const slideContent = await extractSlideTextContent(xmlContent);
+        const slideContent = await extractSlideTextContent(xmlContent, options.options);
         if (slideContent.trim()) {
           markdown += `${slideContent}\n\n`;
         } else {
@@ -289,7 +318,7 @@ async function parsePptxToMarkdown(
       markdown += `## Slide ${slideNumber}\n\n`;
       
       const xmlContent = await slideFile.file.async('string');
-      const slideContent = await extractSlideTextContent(xmlContent);
+      const slideContent = await extractSlideTextContent(xmlContent, options.options);
       
       if (slideContent.trim()) {
         markdown += `${slideContent}\n\n`;
@@ -339,14 +368,21 @@ async function parsePptxToMarkdown(
 /**
  * Extract PPTX title from document properties
  */
-async function extractPptxTitle(buffer: Buffer): Promise<string | undefined> {
+async function extractPptxTitle(buffer: Buffer, securityOptions?: ConvertOptions): Promise<string | undefined> {
   try {
     const zip = await JSZip.loadAsync(buffer);
     const corePropsFile = zip.file('docProps/core.xml');
     
     if (corePropsFile) {
       const corePropsContent = await corePropsFile.async('string');
-      const result = await parseStringPromise(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
+      let result: { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
+      
+      if (securityOptions) {
+        const secureXmlParser = createSecureXmlParser(securityOptions);
+        result = await secureXmlParser(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
+      } else {
+        result = await parseStringPromise(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
+      }
       
       // Try to extract title from core properties
       const title = result?.['cp:coreProperties']?.[0]?.['dc:title']?.[0];
@@ -365,10 +401,18 @@ async function extractPptxTitle(buffer: Buffer): Promise<string | undefined> {
  * Extract text content from slide XML
  */
 async function extractSlideTextContent(
-  xmlContent: string
+  xmlContent: string,
+  securityOptions?: ConvertOptions
 ): Promise<string> {
   try {
-    const result = await parseStringPromise(xmlContent);
+    let result: Record<string, unknown>;
+    
+    if (securityOptions) {
+      const secureXmlParser = createSecureXmlParser(securityOptions);
+      result = await secureXmlParser(xmlContent);
+    } else {
+      result = await parseStringPromise(xmlContent);
+    }
     
     // Simple text extraction function
     function extractText(obj: unknown): string {

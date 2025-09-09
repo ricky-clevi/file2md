@@ -2,7 +2,8 @@ const { convert } = require('../src/index');
 const { 
   UnsupportedFormatError, 
   FileNotFoundError, 
-  InvalidFileError 
+  InvalidFileError,
+  SecurityError 
 } = require('../src/types/index');
 
 describe('file2md', () => {
@@ -16,9 +17,9 @@ describe('file2md', () => {
       await expect(convert(123)).rejects.toThrow(InvalidFileError);
     });
 
-    it('should throw UnsupportedFormatError for empty buffer', async () => {
+    it('should throw SecurityError for empty buffer', async () => {
       const emptyBuffer = Buffer.alloc(0);
-      await expect(convert(emptyBuffer)).rejects.toThrow(UnsupportedFormatError);
+      await expect(convert(emptyBuffer)).rejects.toThrow(SecurityError);
     });
 
     it('should throw UnsupportedFormatError for unsupported file type', async () => {

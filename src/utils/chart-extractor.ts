@@ -1,8 +1,9 @@
 import { parseStringPromise } from 'xml2js';
 import type JSZip from 'jszip';
 
-import type { ChartData, ChartSeries, ChartType } from '../types/interfaces.js';
-import { ChartExtractionError } from '../types/errors.js';
+import type { ChartData, ChartSeries, ChartType, ConvertOptions } from '../types/interfaces.js';
+import { ChartExtractionError, SecurityError } from '../types/errors.js';
+import { SecureZipExtractor, createZipSecurityConfig } from './zip-security.js';
 import type { ImageExtractor } from './image-extractor.js';
 
 interface ExtractedChart {
@@ -77,10 +78,38 @@ export class ChartExtractor {
   /**
    * Extract charts from a ZIP archive (DOCX, XLSX, PPTX)
    */
-  async extractChartsFromZip(zip: JSZip, basePath: string = ''): Promise<readonly ExtractedChart[]> {
+  async extractChartsFromZip(
+    zip: JSZip, 
+    basePath: string = '', 
+    options?: ConvertOptions
+  ): Promise<readonly ExtractedChart[]> {
+    // Create secure ZIP extractor
+    const securityConfig = createZipSecurityConfig(options || {});
+    const secureExtractor = new SecureZipExtractor(securityConfig);
+    
+    // Validate ZIP archive first
+    try {
+      await secureExtractor.validate(zip);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        console.warn(`ZIP security validation failed for chart extraction: ${error.message}`);
+        throw new ChartExtractionError(
+          `Archive failed security validation: ${error.message}`,
+          error
+        );
+      }
+      throw error;
+    }
+    
     const charts: ChartFileInfo[] = [];
     
     zip.forEach((relativePath, file) => {
+      // Skip if path is not safe
+      if (!secureExtractor.isPathSafe(relativePath)) {
+        console.warn(`Skipping unsafe chart path: ${relativePath}`);
+        return;
+      }
+      
       // Look for chart files
       if (relativePath.includes('/charts/') && relativePath.endsWith('.xml')) {
         charts.push({
@@ -94,7 +123,9 @@ export class ChartExtractor {
     const extractedCharts: ExtractedChart[] = [];
     for (const chart of charts) {
       try {
-        const chartData = await this.parseChart(chart.file);
+        // Use secure file extraction
+        const xmlBuffer = await secureExtractor.extractFile(chart.file, chart.path);
+        const chartData = await this.parseChartFromBuffer(xmlBuffer);
         if (chartData) {
           extractedCharts.push({
             originalPath: chart.path,
@@ -370,5 +401,70 @@ export class ChartExtractor {
    */
   get currentChartCount(): number {
     return this.chartCounter;
+  }
+
+  /**
+   * Parse chart data from a buffer (secure version)
+   */
+  private async parseChartFromBuffer(buffer: Buffer): Promise<ChartData | null> {
+    try {
+      const xmlContent = buffer.toString('utf8');
+      const result = await parseStringPromise(xmlContent) as ChartXmlResult;
+      
+      const chartSpace = result['c:chartSpace'];
+      if (!chartSpace || !chartSpace[0]) return null;
+
+      const chart = chartSpace[0]['c:chart'];
+      if (!chart || !chart[0]) return null;
+
+      const chartData: Omit<ChartData, 'type' | 'title' | 'series' | 'categories'> & {
+        type: ChartType;
+        title: string;
+        series: ChartSeries[];
+        categories: string[];
+      } = {
+        type: 'unknown',
+        title: 'Chart',
+        series: [],
+        categories: []
+      };
+
+      // Extract title
+      if (chart[0]['c:title']?.[0]?.['c:tx']) {
+        chartData.title = this.extractTextFromTitle(chart[0]['c:title'][0]['c:tx'][0]);
+      }
+
+      // Extract plot area and determine chart type
+      const plotArea = chart[0]['c:plotArea']?.[0];
+      if (plotArea) {
+        if (plotArea['c:barChart']) {
+          chartData.type = 'bar';
+          const { series, categories } = this.extractBarChartData(plotArea['c:barChart'][0] as ChartSeriesData);
+          chartData.series = series;
+          chartData.categories = categories;
+        } else if (plotArea['c:lineChart']) {
+          chartData.type = 'line';
+          const { series, categories } = this.extractLineChartData(plotArea['c:lineChart'][0] as ChartSeriesData);
+          chartData.series = series;
+          chartData.categories = categories;
+        } else if (plotArea['c:pieChart']) {
+          chartData.type = 'pie';
+          const { series, categories } = this.extractPieChartData(plotArea['c:pieChart'][0] as ChartSeriesData);
+          chartData.series = series;
+          chartData.categories = categories;
+        } else if (plotArea['c:scatterChart']) {
+          chartData.type = 'scatter';
+          const { series, categories } = this.extractScatterChartData(plotArea['c:scatterChart'][0] as ChartSeriesData);
+          chartData.series = series;
+          chartData.categories = categories;
+        }
+      }
+
+      return chartData;
+      
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new ChartExtractionError(`Failed to parse chart from buffer: ${message}`, error as Error);
+    }
   }
 }

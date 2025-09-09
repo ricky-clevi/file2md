@@ -2,16 +2,23 @@ import pdfParse from 'pdf-parse';
 import { Buffer } from 'node:buffer';
 
 import { PDFExtractor, type PDFParseOptions, type PDFParseResult } from '../utils/pdf-extractor.js';
-import { ParseError, InvalidFileError } from '../types/errors.js';
+import { ParseError, InvalidFileError, SecurityError, ResourceLimitError } from '../types/errors.js';
+import type { ConvertOptions } from '../types/interfaces.js';
+import { validateBuffer } from '../utils/resource-monitor.js';
 
 /**
  * Parse PDF buffer and convert to markdown with enhanced layout preservation
  */
 export async function parsePdf(
   buffer: Buffer,
-  options: PDFParseOptions = {}
+  options: PDFParseOptions & { options?: ConvertOptions } = {}
 ): Promise<PDFParseResult> {
   try {
+    // Additional security validation for PDF content
+    if (options.options) {
+      validateBuffer(buffer, options.options, 'binary');
+    }
+    
     const data = await pdfParse(buffer);
     const pdfExtractor = new PDFExtractor();
     

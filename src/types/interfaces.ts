@@ -4,6 +4,7 @@ import type { Buffer } from 'node:buffer';
  * Options for document conversion
  */
 export interface ConvertOptions {
+  // EXISTING OPTIONS
   /** Directory to save extracted images. Defaults to 'images' */
   readonly imageDir?: string;
   /** Output directory for slide screenshots (PPTX). Falls back to imageDir if not specified. */
@@ -16,6 +17,24 @@ export interface ConvertOptions {
   readonly extractImages?: boolean;
   /** Maximum number of pages to process for PDFs. Defaults to unlimited */
   readonly maxPages?: number;
+  
+  // SECURITY OPTIONS (New, backwards compatible)
+  /** Maximum file size in bytes. Defaults to 100MB for backwards compatibility */
+  readonly maxFileSize?: number;
+  /** Maximum memory usage during processing in bytes. Defaults to 500MB */
+  readonly maxMemoryUsage?: number;
+  /** Processing timeout in milliseconds. Defaults to 60 seconds */
+  readonly timeout?: number;
+  /** Maximum number of files that can be extracted from archives. Defaults to 1000 */
+  readonly maxExtractedFiles?: number;
+  /** Maximum size when extracting compressed archives in bytes. Defaults to 500MB */
+  readonly maxExtractedSize?: number;
+  /** Maximum individual file size within archives in bytes. Defaults to 50MB */
+  readonly maxIndividualFileSize?: number;
+  /** Whether to enable XXE (XML External Entity) protection. Defaults to true */
+  readonly enableXXEProtection?: boolean;
+  /** Whether to enable strict path validation. Defaults to true */
+  readonly enablePathValidation?: boolean;
 }
 
 /**

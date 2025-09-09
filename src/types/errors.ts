@@ -86,3 +86,88 @@ export class LayoutParsingError extends ConversionError {
     super(`Layout parsing failed: ${reason}`, 'LAYOUT_PARSING_ERROR', originalError);
   }
 }
+
+/**
+ * Thrown when security violations are detected
+ */
+export class SecurityError extends ConversionError {
+  public readonly securityCode: string;
+  public readonly severity: 'low' | 'medium' | 'high' | 'critical';
+
+  constructor(
+    message: string, 
+    securityCode: string = 'SECURITY_VIOLATION', 
+    severity: 'low' | 'medium' | 'high' | 'critical' = 'high',
+    originalError?: Error
+  ) {
+    super(`Security violation: ${message}`, 'SECURITY_ERROR', originalError);
+    this.securityCode = securityCode;
+    this.severity = severity;
+  }
+}
+
+/**
+ * Thrown when resource limits are exceeded
+ */
+export class ResourceLimitError extends SecurityError {
+  public readonly resourceType: string;
+  public readonly limit: number;
+  public readonly actual: number;
+
+  constructor(
+    resourceType: string,
+    limit: number,
+    actual: number,
+    originalError?: Error
+  ) {
+    super(
+      `Resource limit exceeded for ${resourceType}: ${actual} > ${limit}`,
+      'RESOURCE_LIMIT_EXCEEDED',
+      'high',
+      originalError
+    );
+    this.resourceType = resourceType;
+    this.limit = limit;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Thrown when path traversal attempts are detected
+ */
+export class PathTraversalError extends SecurityError {
+  public readonly attemptedPath: string;
+
+  constructor(attemptedPath: string, originalError?: Error) {
+    super(
+      `Path traversal attempt detected: ${attemptedPath}`,
+      'PATH_TRAVERSAL_ATTEMPT',
+      'critical',
+      originalError
+    );
+    this.attemptedPath = attemptedPath;
+  }
+}
+
+/**
+ * Thrown when malicious content is detected
+ */
+export class MaliciousContentError extends SecurityError {
+  public readonly contentType: string;
+  public readonly details: string;
+
+  constructor(
+    contentType: string,
+    details: string,
+    originalError?: Error
+  ) {
+    super(
+      `Malicious content detected in ${contentType}: ${details}`,
+      'MALICIOUS_CONTENT_DETECTED',
+      'critical',
+      originalError
+    );
+    this.contentType = contentType;
+    this.details = details;
+  }
+}

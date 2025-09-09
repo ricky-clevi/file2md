@@ -6,20 +6,24 @@ import type { Buffer } from 'node:buffer';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
 import { LayoutParser } from '../utils/layout-parser.js';
-import { ParseError, InvalidFileError } from '../types/errors.js';
+import { ParseError, InvalidFileError, SecurityError } from '../types/errors.js';
 import type { 
   ImageData, 
   ChartData, 
   CellData, 
   RowData, 
   TableData,
-  TextAlignment 
+  TextAlignment,
+  ConvertOptions 
 } from '../types/interfaces.js';
+import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
+import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
 
 export interface DocxParseOptions {
   readonly preserveLayout?: boolean;
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
+  readonly options?: ConvertOptions;
 }
 
 export interface DocxParseResult {
@@ -60,7 +64,32 @@ export async function parseDocx(
   options: DocxParseOptions = {}
 ): Promise<DocxParseResult> {
   try {
+    // Create secure ZIP extractor if security options are provided
+    let secureExtractor: SecureZipExtractor | undefined;
+    if (options.options) {
+      const securityConfig = createZipSecurityConfig(options.options);
+      secureExtractor = new SecureZipExtractor(securityConfig);
+    }
+
     const zip = await JSZip.loadAsync(buffer);
+    
+    // Validate ZIP archive for security if extractor is available
+    if (secureExtractor) {
+      try {
+        await secureExtractor.validate(zip);
+      } catch (error) {
+        if (error instanceof SecurityError) {
+          throw new SecurityError(
+            `DOCX security validation failed: ${error.message}`,
+            error.securityCode,
+            error.severity,
+            error
+          );
+        }
+        throw error;
+      }
+    }
+    
     const documentXml = zip.file('word/document.xml');
     
     if (!documentXml) {
@@ -69,12 +98,12 @@ export async function parseDocx(
     
     // Extract images first
     const extractedImages = options.extractImages !== false 
-      ? await imageExtractor.extractImagesFromZip(zip, 'word/')
+      ? await imageExtractor.extractImagesFromZip(zip, 'word/', options.options)
       : [];
     
     // Extract charts if enabled
     const extractedCharts = options.extractCharts !== false
-      ? await chartExtractor.extractChartsFromZip(zip, 'word/')
+      ? await chartExtractor.extractChartsFromZip(zip, 'word/', options.options)
       : [];
     
     // Initialize layout parser
@@ -82,25 +111,31 @@ export async function parseDocx(
     
     const xmlContent = await documentXml.async('string');
   
-    
-    // Try parsing with different options to handle namespaces
-    const parseOptions: ParserOptions = {
-      explicitCharkey: false,
-      trim: true,
-      normalize: true,
-      explicitRoot: true,  // Keep the root element
-      emptyTag: () => null,
-      explicitChildren: false,
-      charsAsChildren: false,
-      includeWhiteChars: false,
-      mergeAttrs: false,
-      attrNameProcessors: [],
-      attrValueProcessors: [],
-      tagNameProcessors: [],
-      valueProcessors: []
-    };
+    // Parse XML securely if security options are provided
+    let result: Record<string, unknown>;
+    if (options.options) {
+      const secureXmlParser = createSecureXmlParser(options.options);
+      result = await secureXmlParser(xmlContent);
+    } else {
+      // Try parsing with different options to handle namespaces
+      const parseOptions: ParserOptions = {
+        explicitCharkey: false,
+        trim: true,
+        normalize: true,
+        explicitRoot: true,  // Keep the root element
+        emptyTag: () => null,
+        explicitChildren: false,
+        charsAsChildren: false,
+        includeWhiteChars: false,
+        mergeAttrs: false,
+        attrNameProcessors: [],
+        attrValueProcessors: [],
+        tagNameProcessors: [],
+        valueProcessors: []
+      };
 
-    const result = await parseStringPromise(xmlContent, parseOptions) as Record<string, unknown>;
+      result = await parseStringPromise(xmlContent, parseOptions) as Record<string, unknown>;
+    }
     
     // Handle both array and non-array XML parsing results
     // The structure should be: result['w:document'] -> document element
