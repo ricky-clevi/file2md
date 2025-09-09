@@ -124,13 +124,14 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
     // Setup extractors
     const {
       imageDir = 'images',
+      outputDir = imageDir,
       preserveLayout = true,
       extractCharts = true,
       extractImages = true,
       maxPages
     } = options;
 
-    const imageExtractor = new ImageExtractor(imageDir);
+    const imageExtractor = new ImageExtractor(outputDir);
     const chartExtractor = new ChartExtractor(imageExtractor);
 
     // Parse document based on type
@@ -169,10 +170,11 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
       }
       
       case SUPPORTED_MIME_TYPES.PPTX: {
-        const result = await parsePptx(buffer, imageExtractor, chartExtractor, { 
-          preserveLayout, 
-          extractImages, 
-          extractCharts
+        const result = await parsePptx(buffer, imageExtractor, chartExtractor, {
+          preserveLayout,
+          extractImages,
+          extractCharts,
+          outputDir
         });
         markdown = result.markdown;
         images = result.images || [];
