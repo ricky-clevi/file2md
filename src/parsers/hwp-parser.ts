@@ -1064,6 +1064,8 @@ function extractContentNodes(
 /**
  * Find image reference based on drawing/picture object
  */
+let globalImageCounter = 0;
+
 function findImageReference(
   drawingObj: unknown,
   images: readonly ImageData[],
@@ -1071,8 +1073,8 @@ function findImageReference(
 ): string | null {
   // Reset global counter at the start of each conversion to ensure fresh sequence
   // This is a simple approach - in production you might want a more sophisticated reset mechanism
-  if (images.length > 0 && (!('__globalImageCounter' in findImageReference) || (findImageReference as any).__globalImageCounter >= images.length * 2)) {
-    (findImageReference as any).__globalImageCounter = 0;
+  if (images.length > 0 && globalImageCounter >= images.length * 2) {
+    globalImageCounter = 0;
   }
   if (!images || images.length === 0) return null;
   
@@ -1172,12 +1174,8 @@ function findImageReference(
     
     // If no specific match found, but we do have extracted images, use a global counter
     // to ensure each image reference gets a different image in sequence
-    if (!('__globalImageCounter' in findImageReference)) {
-      (findImageReference as any).__globalImageCounter = 0;
-    }
-    const globalCounter = (findImageReference as any).__globalImageCounter;
-    const selected = images[globalCounter % images.length];
-    (findImageReference as any).__globalImageCounter = globalCounter + 1;
+    const selected = images[globalImageCounter % images.length];
+    globalImageCounter += 1;
     
     if (selected) {
       const imageName = path.basename(selected.savedPath);
