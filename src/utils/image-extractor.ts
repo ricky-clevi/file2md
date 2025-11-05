@@ -4,7 +4,7 @@ import type JSZip from 'jszip';
 import type { Buffer } from 'node:buffer';
 
 import type { ImageData, ConvertOptions } from '../types/interfaces.js';
-import { ImageExtractionError, SecurityError } from '../types/errors.js';
+import { ImageExtractionError, SecurityError, PathTraversalError } from '../types/errors.js';
 import { 
   SecureZipExtractor, 
   createZipSecurityConfig, 
@@ -25,11 +25,23 @@ export class ImageExtractor {
   private readonly extractedImages = new Map<string, string>();
 
   constructor(outputDir: string = 'images') {
-    this.outputDir = outputDir;
-    
+    // Validate and normalize output directory for security
+    const normalized = path.normalize(outputDir);
+
+    // Prevent path traversal attacks - reject paths with .. or absolute paths
+    if (normalized.includes('..') || path.isAbsolute(normalized)) {
+      throw new SecurityError(
+        'Invalid output directory: path traversal or absolute paths not allowed',
+        'INVALID_OUTPUT_PATH',
+        'high'
+      );
+    }
+
+    this.outputDir = normalized;
+
     // Reset counter to ensure fresh start
     this.reset();
-    
+
     // Create images directory if it doesn't exist
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
@@ -145,7 +157,18 @@ export class ImageExtractor {
       const hasExtension = path.extname(providedName);
       const filename = hasExtension ? providedName : `image_${this.imageCounter}${finalExt}`;
       const fullPath = path.join(this.outputDir, filename);
-            
+
+      // Validate that resolved path is still within output directory (prevent path traversal)
+      const resolvedPath = path.resolve(fullPath);
+      const resolvedDir = path.resolve(this.outputDir);
+      const resolvedDirWithSep = resolvedDir + path.sep;
+
+      if (!resolvedPath.startsWith(resolvedDirWithSep) && resolvedPath !== resolvedDir) {
+        throw new PathTraversalError(
+          `Attempt to write file outside output directory: ${filename}`
+        );
+      }
+
       fs.writeFileSync(fullPath, finalBuffer);
       
       // Store mapping for reference lookup

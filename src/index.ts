@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { Buffer } from 'node:buffer';
+import path from 'node:path';
 import fileType from 'file-type';
 
 import { ImageExtractor } from './utils/image-extractor.js';
@@ -98,7 +99,9 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
           buffer = await fs.readFile(input);
         } catch (error: unknown) {
           if ((error as { code: string })?.code === 'ENOENT') {
-            throw new FileNotFoundError(input);
+            // Sanitize path to prevent information disclosure - only show filename
+            const filename = typeof input === 'string' ? path.basename(input) : 'unknown';
+            throw new FileNotFoundError(filename);
           }
           // Sanitize error message to prevent path disclosure
           throw new InvalidFileError('Failed to read file', error as Error);
@@ -174,13 +177,13 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         case SUPPORTED_MIME_TYPES.PDF: {
           // Check resources before PDF processing
           monitor.performCheck();
-          
-          const result = await parsePdf(buffer, { maxPages, preserveLayout });
+
+          const result = await parsePdf(buffer, { maxPages, preserveLayout, options });
           markdown = result.markdown;
           images = result.images || [];
           pageCount = result.pageCount || 1;
           additionalMetadata = result.metadata || {};
-          
+
           // Check resources after PDF processing
           monitor.performCheck();
           break;
@@ -189,17 +192,18 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         case SUPPORTED_MIME_TYPES.DOCX: {
           // Check resources before DOCX processing
           monitor.performCheck();
-          
-          const result = await parseDocx(buffer, imageExtractor, chartExtractor, { 
-            preserveLayout, 
-            extractImages, 
-            extractCharts 
+
+          const result = await parseDocx(buffer, imageExtractor, chartExtractor, {
+            preserveLayout,
+            extractImages,
+            extractCharts,
+            options
           });
           markdown = result.markdown;
           images = result.images || [];
           charts = result.charts || [];
           additionalMetadata = result.metadata || {};
-          
+
           // Check resources after DOCX processing
           monitor.performCheck();
           break;
@@ -208,16 +212,17 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         case SUPPORTED_MIME_TYPES.XLSX: {
           // Check resources before XLSX processing
           monitor.performCheck();
-          
-          const result = await parseXlsx(buffer, imageExtractor, chartExtractor, { 
-            preserveLayout, 
-            extractCharts 
+
+          const result = await parseXlsx(buffer, imageExtractor, chartExtractor, {
+            preserveLayout,
+            extractCharts,
+            options
           });
           markdown = result.markdown;
           charts = result.charts || [];
           pageCount = result.sheetCount || 1;
           additionalMetadata = result.metadata || {};
-          
+
           // Check resources after XLSX processing
           monitor.performCheck();
           break;
@@ -226,19 +231,20 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         case SUPPORTED_MIME_TYPES.PPTX: {
           // Check resources before PPTX processing
           monitor.performCheck();
-          
+
           const result = await parsePptx(buffer, imageExtractor, chartExtractor, {
             preserveLayout,
             extractImages,
             extractCharts,
-            outputDir
+            outputDir,
+            options
           });
           markdown = result.markdown;
           images = result.images || [];
           charts = result.charts || [];
           pageCount = result.slideCount || 1;
           additionalMetadata = result.metadata || {};
-          
+
           // Check resources after PPTX processing
           monitor.performCheck();
           break;
@@ -248,18 +254,19 @@ export async function convert(input: ConvertInput, options: ConvertOptions = {})
         case SUPPORTED_MIME_TYPES.HWPX: {
           // Check resources before HWP processing
           monitor.performCheck();
-          
+
           const result = await parseHwp(buffer, imageExtractor, chartExtractor, {
             preserveLayout,
             extractImages,
-            extractCharts
+            extractCharts,
+            options
           });
           markdown = result.markdown;
           images = result.images || [];
           charts = result.charts || [];
           pageCount = 1; // Single document
           additionalMetadata = result.metadata || {};
-          
+
           // Check resources after HWP processing
           monitor.performCheck();
           break;
