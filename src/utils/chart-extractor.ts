@@ -1,9 +1,9 @@
-import { parseStringPromise } from 'xml2js';
 import type JSZip from 'jszip';
 
 import type { ChartData, ChartSeries, ChartType, ConvertOptions } from '../types/interfaces.js';
 import { ChartExtractionError, SecurityError } from '../types/errors.js';
 import { SecureZipExtractor, createZipSecurityConfig } from './zip-security.js';
+import { createSecureXmlParser } from './secure-xml-parser.js';
 import type { ImageExtractor } from './image-extractor.js';
 
 interface ExtractedChart {
@@ -125,7 +125,7 @@ export class ChartExtractor {
       try {
         // Use secure file extraction
         const xmlBuffer = await secureExtractor.extractFile(chart.file, chart.path);
-        const chartData = await this.parseChartFromBuffer(xmlBuffer);
+        const chartData = await this.parseChartFromBuffer(xmlBuffer, options);
         if (chartData) {
           extractedCharts.push({
             originalPath: chart.path,
@@ -142,12 +142,16 @@ export class ChartExtractor {
   }
 
   /**
-   * Parse a chart XML file
+   * Parse a chart XML file (deprecated - kept for compatibility)
+   * @deprecated Use parseChartFromBuffer with secure extraction instead
    */
-  private async parseChart(chartFile: JSZip.JSZipObject): Promise<ChartData | null> {
+  private async parseChart(chartFile: JSZip.JSZipObject, options?: ConvertOptions): Promise<ChartData | null> {
     try {
       const xmlContent = await chartFile.async('string');
-      const result = await parseStringPromise(xmlContent) as ChartXmlResult;
+
+      // Always use secure XML parsing to prevent XXE attacks
+      const secureXmlParser = createSecureXmlParser(options || {});
+      const result = await secureXmlParser(xmlContent) as ChartXmlResult;
       
       const chartData: Omit<ChartData, 'type' | 'title' | 'series' | 'categories'> & {
         type: ChartType;
@@ -406,10 +410,13 @@ export class ChartExtractor {
   /**
    * Parse chart data from a buffer (secure version)
    */
-  private async parseChartFromBuffer(buffer: Buffer): Promise<ChartData | null> {
+  private async parseChartFromBuffer(buffer: Buffer, options?: ConvertOptions): Promise<ChartData | null> {
     try {
       const xmlContent = buffer.toString('utf8');
-      const result = await parseStringPromise(xmlContent) as ChartXmlResult;
+
+      // Always use secure XML parsing to prevent XXE attacks
+      const secureXmlParser = createSecureXmlParser(options || {});
+      const result = await secureXmlParser(xmlContent) as ChartXmlResult;
       
       const chartSpace = result['c:chartSpace'];
       if (!chartSpace || !chartSpace[0]) return null;

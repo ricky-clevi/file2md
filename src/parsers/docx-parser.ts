@@ -1,5 +1,4 @@
 import JSZip from 'jszip';
-import { parseStringPromise, type ParserOptions } from 'xml2js';
 import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
@@ -110,32 +109,10 @@ export async function parseDocx(
     const layoutParser = new LayoutParser();
     
     const xmlContent = await documentXml.async('string');
-  
-    // Parse XML securely if security options are provided
-    let result: Record<string, unknown>;
-    if (options.options) {
-      const secureXmlParser = createSecureXmlParser(options.options);
-      result = await secureXmlParser(xmlContent);
-    } else {
-      // Try parsing with different options to handle namespaces
-      const parseOptions: ParserOptions = {
-        explicitCharkey: false,
-        trim: true,
-        normalize: true,
-        explicitRoot: true,  // Keep the root element
-        emptyTag: () => null,
-        explicitChildren: false,
-        charsAsChildren: false,
-        includeWhiteChars: false,
-        mergeAttrs: false,
-        attrNameProcessors: [],
-        attrValueProcessors: [],
-        tagNameProcessors: [],
-        valueProcessors: []
-      };
 
-      result = await parseStringPromise(xmlContent, parseOptions) as Record<string, unknown>;
-    }
+    // Always parse XML securely to prevent XXE attacks
+    const secureXmlParser = createSecureXmlParser(options.options || {});
+    const result = await secureXmlParser(xmlContent) as Record<string, unknown>;
     
     // Handle both array and non-array XML parsing results
     // The structure should be: result['w:document'] -> document element

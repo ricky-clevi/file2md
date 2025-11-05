@@ -1,5 +1,4 @@
 import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
 import type { Buffer } from 'node:buffer';
 
 import type { ImageExtractor } from '../utils/image-extractor.js';
@@ -148,14 +147,10 @@ async function getSharedStrings(zip: JSZip, securityOptions?: ConvertOptions): P
   
   try {
     const xmlContent = await sharedStringsFile.async('string');
-    let result: { sst?: { si?: readonly SharedStringItem[] } };
-    
-    if (securityOptions) {
-      const secureXmlParser = createSecureXmlParser(securityOptions);
-      result = await secureXmlParser(xmlContent) as { sst?: { si?: readonly SharedStringItem[] } };
-    } else {
-      result = await parseStringPromise(xmlContent) as { sst?: { si?: readonly SharedStringItem[] } };
-    }
+
+    // Always use secure XML parsing to prevent XXE attacks
+    const secureXmlParser = createSecureXmlParser(securityOptions || {});
+    const result = await secureXmlParser(xmlContent) as { sst?: { si?: readonly SharedStringItem[] } };
     
     const strings: string[] = [];
     if (result.sst?.si) {
@@ -189,14 +184,10 @@ async function getWorkbook(zip: JSZip, securityOptions?: ConvertOptions): Promis
   
   try {
     const xmlContent = await workbookFile.async('string');
-    let result: { workbook?: { sheets?: readonly { sheet?: readonly { $: { name: string, sheetId: string, 'r:id': string } }[] }[] } };
-    
-    if (securityOptions) {
-      const secureXmlParser = createSecureXmlParser(securityOptions);
-      result = await secureXmlParser(xmlContent) as { workbook?: { sheets?: readonly { sheet?: readonly { $: { name: string, sheetId: string, 'r:id': string } }[] }[] } };
-    } else {
-      result = await parseStringPromise(xmlContent) as { workbook?: { sheets?: readonly { sheet?: readonly { $: { name: string, sheetId: string, 'r:id': string } }[] }[] } };
-    }
+
+    // Always use secure XML parsing to prevent XXE attacks
+    const secureXmlParser = createSecureXmlParser(securityOptions || {});
+    const result = await secureXmlParser(xmlContent) as { workbook?: { sheets?: readonly { sheet?: readonly { $: { name: string, sheetId: string, 'r:id': string } }[] }[] } };
     
     const sheets: WorkbookSheet[] = [];
     if (result.workbook?.sheets?.[0]?.sheet) {
@@ -222,14 +213,10 @@ async function getStyles(zip: JSZip, securityOptions?: ConvertOptions): Promise<
   
   try {
     const xmlContent = await stylesFile.async('string');
-    let result: { styleSheet?: { fonts?: readonly { font?: readonly { b?: readonly unknown[], i?: readonly unknown[], sz?: readonly { $: { val: string } }[] }[] }[], fills?: readonly { fill?: readonly { patternFill?: readonly { bgColor?: readonly { $: { rgb: string } }[] }[] }[] }[], cellXfs?: readonly { xf?: readonly { $: { fontId: string, fillId: string }, alignment?: readonly { $: { horizontal: string } }[] }[] }[] } };
-    
-    if (securityOptions) {
-      const secureXmlParser = createSecureXmlParser(securityOptions);
-      result = await secureXmlParser(xmlContent) as { styleSheet?: { fonts?: readonly { font?: readonly { b?: readonly unknown[], i?: readonly unknown[], sz?: readonly { $: { val: string } }[] }[] }[], fills?: readonly { fill?: readonly { patternFill?: readonly { bgColor?: readonly { $: { rgb: string } }[] }[] }[] }[], cellXfs?: readonly { xf?: readonly { $: { fontId: string, fillId: string }, alignment?: readonly { $: { horizontal: string } }[] }[] }[] } };
-    } else {
-      result = await parseStringPromise(xmlContent) as { styleSheet?: { fonts?: readonly { font?: readonly { b?: readonly unknown[], i?: readonly unknown[], sz?: readonly { $: { val: string } }[] }[] }[], fills?: readonly { fill?: readonly { patternFill?: readonly { bgColor?: readonly { $: { rgb: string } }[] }[] }[] }[], cellXfs?: readonly { xf?: readonly { $: { fontId: string, fillId: string }, alignment?: readonly { $: { horizontal: string } }[] }[] }[] } };
-    }
+
+    // Always use secure XML parsing to prevent XXE attacks
+    const secureXmlParser = createSecureXmlParser(securityOptions || {});
+    const result = await secureXmlParser(xmlContent) as { styleSheet?: { fonts?: readonly { font?: readonly { b?: readonly unknown[], i?: readonly unknown[], sz?: readonly { $: { val: string } }[] }[] }[], fills?: readonly { fill?: readonly { patternFill?: readonly { bgColor?: readonly { $: { rgb: string } }[] }[] }[] }[], cellXfs?: readonly { xf?: readonly { $: { fontId: string, fillId: string }, alignment?: readonly { $: { horizontal: string } }[] }[] }[] } };
     
     const styles: { fonts: FontData[], fills: FillData[], cellXfs: CellFormat[] } = {
       fonts: [],
@@ -300,14 +287,10 @@ async function getWorksheets(
     if (worksheetFile) {
       try {
         const xmlContent = await worksheetFile.async('string');
-        let result: { worksheet?: { sheetData?: readonly { row?: readonly { $: { r: string }, c?: readonly { $: { r: string, s?: string, t?: string }, v?: readonly [string] }[] }[] }[] } };
-        
-        if (securityOptions) {
-          const secureXmlParser = createSecureXmlParser(securityOptions);
-          result = await secureXmlParser(xmlContent) as { worksheet?: { sheetData?: readonly { row?: readonly { $: { r: string }, c?: readonly { $: { r: string, s?: string, t?: string }, v?: readonly [string] }[] }[] }[] } };
-        } else {
-          result = await parseStringPromise(xmlContent) as { worksheet?: { sheetData?: readonly { row?: readonly { $: { r: string }, c?: readonly { $: { r: string, s?: string, t?: string }, v?: readonly [string] }[] }[] }[] } };
-        }
+
+        // Always use secure XML parsing to prevent XXE attacks
+        const secureXmlParser = createSecureXmlParser(securityOptions || {});
+        const result = await secureXmlParser(xmlContent) as { worksheet?: { sheetData?: readonly { row?: readonly { $: { r: string }, c?: readonly { $: { r: string, s?: string, t?: string }, v?: readonly [string] }[] }[] }[] } };
         
         const sheetData: TableData = { rows: [] };
         

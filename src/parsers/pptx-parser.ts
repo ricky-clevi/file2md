@@ -1,5 +1,4 @@
 import JSZip from 'jszip';
-import { parseStringPromise } from 'xml2js';
 import path from 'node:path';
 import type { Buffer } from 'node:buffer';
 
@@ -375,14 +374,10 @@ async function extractPptxTitle(buffer: Buffer, securityOptions?: ConvertOptions
     
     if (corePropsFile) {
       const corePropsContent = await corePropsFile.async('string');
-      let result: { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
-      
-      if (securityOptions) {
-        const secureXmlParser = createSecureXmlParser(securityOptions);
-        result = await secureXmlParser(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
-      } else {
-        result = await parseStringPromise(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
-      }
+
+      // Always use secure XML parsing to prevent XXE attacks
+      const secureXmlParser = createSecureXmlParser(securityOptions || {});
+      const result = await secureXmlParser(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
       
       // Try to extract title from core properties
       const title = result?.['cp:coreProperties']?.[0]?.['dc:title']?.[0];
@@ -405,14 +400,9 @@ async function extractSlideTextContent(
   securityOptions?: ConvertOptions
 ): Promise<string> {
   try {
-    let result: Record<string, unknown>;
-    
-    if (securityOptions) {
-      const secureXmlParser = createSecureXmlParser(securityOptions);
-      result = await secureXmlParser(xmlContent);
-    } else {
-      result = await parseStringPromise(xmlContent);
-    }
+    // Always use secure XML parsing to prevent XXE attacks
+    const secureXmlParser = createSecureXmlParser(securityOptions || {});
+    const result = await secureXmlParser(xmlContent);
     
     // Simple text extraction function
     function extractText(obj: unknown): string {
