@@ -10,7 +10,7 @@ export abstract class ConversionError extends Error {
     this.name = this.constructor.name;
     this.code = code;
     this.originalError = originalError;
-    
+
     // Maintain proper stack trace for where our error was thrown (only available on V8)
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, this.constructor);
@@ -22,7 +22,17 @@ export abstract class ConversionError extends Error {
  * Thrown when a file format is not supported
  */
 export class UnsupportedFormatError extends ConversionError {
-  constructor(mimeType: string, supportedFormats: readonly string[] = ['PDF', 'DOCX', 'XLSX', 'PPTX', 'HWP', 'HWPX']) {
+  constructor(
+    mimeType: string,
+    supportedFormats: readonly string[] = [
+      'PDF',
+      'DOCX',
+      'XLSX',
+      'PPTX',
+      'HWP',
+      'HWPX'
+    ]
+  ) {
     super(
       `Unsupported file type: ${mimeType}. Supported formats: ${supportedFormats.join(', ')}`,
       'UNSUPPORTED_FORMAT'
@@ -44,7 +54,11 @@ export class FileNotFoundError extends ConversionError {
  */
 export class InvalidFileError extends ConversionError {
   constructor(reason: string, originalError?: Error) {
-    super(`Invalid or corrupted file: ${reason}`, 'INVALID_FILE', originalError);
+    super(
+      `Invalid or corrupted file: ${reason}`,
+      'INVALID_FILE',
+      originalError
+    );
   }
 }
 
@@ -55,7 +69,11 @@ export class ParseError extends ConversionError {
   public readonly fileType: string;
 
   constructor(fileType: string, reason: string, originalError?: Error) {
-    super(`Failed to parse ${fileType}: ${reason}`, 'PARSE_ERROR', originalError);
+    super(
+      `Failed to parse ${fileType}: ${reason}`,
+      'PARSE_ERROR',
+      originalError
+    );
     this.fileType = fileType;
   }
 }
@@ -65,7 +83,11 @@ export class ParseError extends ConversionError {
  */
 export class ImageExtractionError extends ConversionError {
   constructor(reason: string, originalError?: Error) {
-    super(`Image extraction failed: ${reason}`, 'IMAGE_EXTRACTION_ERROR', originalError);
+    super(
+      `Image extraction failed: ${reason}`,
+      'IMAGE_EXTRACTION_ERROR',
+      originalError
+    );
   }
 }
 
@@ -74,7 +96,11 @@ export class ImageExtractionError extends ConversionError {
  */
 export class ChartExtractionError extends ConversionError {
   constructor(reason: string, originalError?: Error) {
-    super(`Chart extraction failed: ${reason}`, 'CHART_EXTRACTION_ERROR', originalError);
+    super(
+      `Chart extraction failed: ${reason}`,
+      'CHART_EXTRACTION_ERROR',
+      originalError
+    );
   }
 }
 
@@ -83,7 +109,11 @@ export class ChartExtractionError extends ConversionError {
  */
 export class LayoutParsingError extends ConversionError {
   constructor(reason: string, originalError?: Error) {
-    super(`Layout parsing failed: ${reason}`, 'LAYOUT_PARSING_ERROR', originalError);
+    super(
+      `Layout parsing failed: ${reason}`,
+      'LAYOUT_PARSING_ERROR',
+      originalError
+    );
   }
 }
 
@@ -95,8 +125,8 @@ export class SecurityError extends ConversionError {
   public readonly severity: 'low' | 'medium' | 'high' | 'critical';
 
   constructor(
-    message: string, 
-    securityCode: string = 'SECURITY_VIOLATION', 
+    message: string,
+    securityCode: string = 'SECURITY_VIOLATION',
     severity: 'low' | 'medium' | 'high' | 'critical' = 'high',
     originalError?: Error
   ) {
@@ -156,11 +186,7 @@ export class MaliciousContentError extends SecurityError {
   public readonly contentType: string;
   public readonly details: string;
 
-  constructor(
-    contentType: string,
-    details: string,
-    originalError?: Error
-  ) {
+  constructor(contentType: string, details: string, originalError?: Error) {
     super(
       `Malicious content detected in ${contentType}: ${details}`,
       'MALICIOUS_CONTENT_DETECTED',

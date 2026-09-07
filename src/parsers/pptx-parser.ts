@@ -1,450 +1,191 @@
-import JSZip from 'jszip';
-import path from 'node:path';
-import type { Buffer } from 'node:buffer';
-
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
-import { PptxVisualParser, type SlideLayout } from '../utils/pptx-visual-parser.js';
-import { ParseError, SecurityError } from '../types/errors.js';
-import type { 
-  ImageData, 
+import { LayoutParser } from '../utils/layout-parser.js';
+import {
+  ConversionError,
+  InvalidFileError,
+  ParseError
+} from '../types/errors.js';
+import type {
+  ImageData,
   ChartData,
-  ConvertOptions
+  ConvertOptions,
+  CellData
 } from '../types/interfaces.js';
-import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
-import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
+import { loadArchive, type Archive } from '../utils/zip-security.js';
+import {
+  readXml,
+  relationships,
+  child,
+  children,
+  descendants,
+  text,
+  attr,
+  localName,
+  type XmlNode
+} from '../utils/xml.js';
+import { escapeMarkdown } from '../utils/markdown.js';
+import { checkResources } from '../utils/resource-monitor.js';
 
 export interface PptxParseOptions {
   readonly preserveLayout?: boolean;
   readonly extractImages?: boolean;
   readonly extractCharts?: boolean;
-  readonly useVisualParser?: boolean;
   readonly outputDir?: string;
   readonly options?: ConvertOptions;
 }
-
 export interface PptxParseResult {
   readonly markdown: string;
   readonly images: readonly ImageData[];
   readonly charts: readonly ChartData[];
   readonly slideCount: number;
   readonly metadata: Record<string, unknown>;
-  readonly visualLayouts?: readonly SlideLayout[];
 }
-
-interface SlideFile {
-  readonly path: string;
-  readonly file: JSZip.JSZipObject;
-}
-
-/**
- * Parse PPTX buffer and convert to markdown with layout preservation
- */
 export async function parsePptx(
   buffer: Buffer,
   imageExtractor: ImageExtractor,
   chartExtractor: ChartExtractor,
-  options: PptxParseOptions = {}
+  options: PptxParseOptions = {},
+  archive?: Archive
 ): Promise<PptxParseResult> {
   try {
-    return await parsePptxToMarkdown(
-      buffer,
-      imageExtractor,
-      chartExtractor,
-      options
+    const source = archive ?? (await loadArchive(buffer, options.options));
+    const presentation = await readXml(
+      source,
+      'ppt/presentation.xml',
+      options.options
     );
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('PPTX', message, error as Error);
-  }
-}
-
-/**
- * Parse PPTX to markdown without image generation
- */
-async function parsePptxToMarkdown(
-  buffer: Buffer,
-  imageExtractor: ImageExtractor,
-  chartExtractor: ChartExtractor,
-  options: PptxParseOptions
-): Promise<PptxParseResult> {
-  // Create secure ZIP extractor if security options are provided
-  let secureExtractor: SecureZipExtractor | undefined;
-  if (options.options) {
-    const securityConfig = createZipSecurityConfig(options.options);
-    secureExtractor = new SecureZipExtractor(securityConfig);
-  }
-
-  const zip = await JSZip.loadAsync(buffer);
-  
-  // Validate ZIP archive for security if extractor is available
-  if (secureExtractor) {
-    try {
-      await secureExtractor.validate(zip);
-    } catch (error) {
-      if (error instanceof SecurityError) {
-        throw new SecurityError(
-          `PPTX security validation failed: ${error.message}`,
-          error.securityCode,
-          error.severity,
-          error
-        );
-      }
-      throw error;
-    }
-  }
-  
-  const outputDir = options.outputDir ?? imageExtractor.imageDirectory;
-  
-  // Enhanced visual parsing if requested (for text extraction)
-  let visualLayouts: SlideLayout[] | undefined;
-  if (options.useVisualParser !== false) {
-    try {
-      const visualParser = new PptxVisualParser();
-      const readonlyLayouts = await visualParser.parseVisualElements(buffer);
-      visualLayouts = [...readonlyLayouts];
-    } catch (visualError) {
-      console.warn('Visual parsing failed, continuing with standard processing:', visualError);
-    }
-  }
-  
-  // Extract embedded images metadata only (not for slide screenshots)
-  const extractedImages = options.extractImages !== false 
-    ? await imageExtractor.extractImagesFromZip(zip, 'ppt/', options.options)
-    : [];
-  
-  // Extract charts if enabled
-  const extractedCharts = options.extractCharts !== false
-    ? await chartExtractor.extractChartsFromZip(zip, 'ppt/', options.options)
-    : [];
-  
-  const slideFiles: SlideFile[] = [];
-  zip.forEach((relativePath, file) => {
-    if (relativePath.startsWith('ppt/slides/slide') && relativePath.endsWith('.xml')) {
-      slideFiles.push({
-        path: relativePath,
-        file
-      });
-    }
-  });
-  
-  slideFiles.sort((a, b) => {
-    const aNum = parseInt(a.path.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
-    const bNum = parseInt(b.path.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
-    return aNum - bNum;
-  });
-  
-  // Extract title from PPTX metadata
-  const title = await extractPptxTitle(buffer, options.options);
-  
-  let markdown = '';
-  
-  if (title) {
-    markdown += `# ${title}\n\n`;
-  }
-  
-  // Use visual layouts for enhanced text extraction if available
-  if (visualLayouts && visualLayouts.length === slideFiles.length) {
-    for (let i = 0; i < slideFiles.length; i++) {
-      const slideFile = slideFiles[i];
-      const slideNumber = i + 1;
-      const layout = visualLayouts[i];
-      
-      if (layout?.title) {
-        markdown += `## Slide ${slideNumber}: ${layout.title}\n\n`;
-      } else {
-        markdown += `## Slide ${slideNumber}\n\n`;
-      }
-      
-      // Extract text from visual layout
-      const textElements = layout.elements.filter(e => e.type === 'text');
-      if (textElements.length > 0) {
-        textElements.forEach((element) => {
-          if (element.type === 'text' && (element.content as { text: string })?.text) {
-            const textContent = (element.content as { text: string }).text.trim();
-            if (textContent) {
-              markdown += `${textContent}\n\n`;
-            }
-          }
-        });
-      } else {
-        // Fallback to XML extraction if no text in visual layout
-        const xmlContent = await slideFile.file.async('string');
-        const slideContent = await extractSlideTextContent(xmlContent, options.options);
-        if (slideContent.trim()) {
-          markdown += `${slideContent}\n\n`;
-        } else {
-          markdown += '*No content*\n\n';
-        }
-      }
-      
-      
-      // Process image elements and generate markdown references
-      const imageElements = layout.elements.filter(e => e.type === 'image');
-      
-      if (imageElements.length > 0) {
-        markdown += '### Images\n\n';
-        imageElements.forEach((element, index) => {
-          if (element.type === 'image' && element.content) {
-            const imageContent = element.content as { imagePath: string };
-            const imagePath = imageContent.imagePath;
-            
-            // Try to get markdown reference using the image extractor
-            const imageRef = imageExtractor.getImageReference(imagePath, 'ppt/');
-            
-            if (imageRef) {
-              markdown += `${imageRef}\n\n`;
-            } else {
-              // Fallback: try to find the image by matching the path
-              const matchingImage = extractedImages.find(img =>
-                img.originalPath === imagePath ||
-                img.originalPath.endsWith(imagePath.split('/').pop() || '')
-              );
-              
-              if (matchingImage) {
-                const imageName = path.basename(matchingImage.savedPath);
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
-              } else if (extractedImages.length > 0) {
-                // Try to use any available image from extracted images
-                const availableImage = extractedImages[Math.min(index, extractedImages.length - 1)];
-                const imageName = path.basename(availableImage.savedPath);
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
-              } else {
-                // Last resort: generic reference
-                const fallbackName = `image_${slideNumber}_${index + 1}.png`;
-                markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, fallbackName)})\n\n`;
+    if (!presentation)
+      throw new InvalidFileError('PPTX is missing presentation.xml');
+    const presentationRels = await relationships(
+      source,
+      'ppt/presentation.xml',
+      options.options
+    );
+    const slides = children(child(presentation, 'sldIdLst'), 'sldId');
+    const images =
+      options.extractImages === false
+        ? []
+        : await imageExtractor.extractImagesFromZip(
+            source.zip,
+            'ppt/',
+            options.options,
+            source.extractor
+          );
+    const charts =
+      options.extractCharts === false
+        ? []
+        : await chartExtractor.extractChartsFromZip(
+            source.zip,
+            'ppt/',
+            options.options,
+            source.extractor
+          );
+    const props = await readXml(source, 'docProps/core.xml', options.options);
+    const title = text(child(props, 'title'));
+    const output: string[] = title ? [`# ${escapeMarkdown(title)}`] : [];
+    const layout = new LayoutParser();
+    function textBody(node: XmlNode | undefined): string {
+      return children(node, 'p')
+        .map((paragraph) => {
+          let value = children(paragraph)
+            .map((run) => {
+              if (localName(run.name) === 'br') return '\n';
+              let content = descendants(run, 't')
+                .map((t) => escapeMarkdown(text(t)))
+                .join('');
+              if (options.preserveLayout !== false && content) {
+                const properties = child(run, 'rPr');
+                if (attr(properties, 'b') === '1') content = `**${content}**`;
+                if (attr(properties, 'i') === '1') content = `*${content}*`;
               }
-            }
+              return content;
+            })
+            .join('');
+          const properties = child(paragraph, 'pPr');
+          if (
+            options.preserveLayout !== false &&
+            (child(properties, 'buChar') || child(properties, 'buAutoNum'))
+          ) {
+            const level = Math.min(8, Number(attr(properties, 'lvl')) || 0);
+            value = `${'  '.repeat(Math.max(0, level))}${child(properties, 'buAutoNum') ? '1.' : '-'} ${value}`;
           }
-        });
-      }
-      
-      // Process chart elements and potentially embedded images
-      const chartElements = layout.elements.filter(e => e.type === 'chart');
-      
-      // Since visual parser misidentifies images as charts, let's embed images inline for slides with charts
-      if (chartElements.length > 0) {
-        // Calculate which images belong to this slide
-        const imagesPerSlide = Math.ceil(extractedImages.length / slideFiles.length);
-        const startIndex = (slideNumber - 1) * imagesPerSlide;
-        const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
-        const slideImages = extractedImages.slice(startIndex, endIndex);
-        
-        
-        // Embed images directly in the slide content, not in a separate section
-        slideImages.forEach((image, index) => {
-          const imageName = path.basename(image.savedPath);
-          markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
-        });
-        
-        // Process actual charts if any chart data is available
-        chartElements.forEach((element, index) => {
-          if (element.type === 'chart' && element.content) {
-            const chartContent = element.content as { chartType: string };
-            const chartType = chartContent.chartType || 'unknown';
-            
-            // Try to find matching extracted chart data
-            const matchingChart = extractedCharts.find(chart =>
-              chart.data.type === chartType || chart.data.title.includes(`Slide ${slideNumber}`)
-            );
-            
-            if (matchingChart) {
-              // Use the chart extractor's formatChartAsMarkdown method for proper formatting
-              const chartMarkdown = chartExtractor.formatChartAsMarkdown(matchingChart.data);
-              markdown += chartMarkdown;
-            } else {
-              // Try to use any available chart from the slide
-              const slideChart = extractedCharts[index] || extractedCharts[0];
-              if (slideChart) {
-                const chartMarkdown = chartExtractor.formatChartAsMarkdown(slideChart.data);
-                markdown += chartMarkdown;
-              }
-              // If no actual chart data, don't show anything since images are already embedded
-            }
-          }
-        });
-      }
-      
-      // Process table elements
-      const tableElements = layout.elements.filter(e => e.type === 'table');
-      
-      if (tableElements.length > 0) {
-        markdown += '### Tables\n\n';
-        tableElements.forEach((element, index) => {
-          if (element.type === 'table' && element.content) {
-            markdown += `**Table ${index + 1}**\n\n`;
-            markdown += `*Table content extraction not yet implemented*\n\n`;
-          }
-        });
-      }
-      
-      // Show "Other Elements" only for non-chart/image/text/table elements
-      const processedElements = imageElements.length + chartElements.length + textElements.length + tableElements.length;
-      const totalElements = layout.elements.length;
-      const otherElements = totalElements - processedElements;
-      
-      // Only show other elements if there are some unprocessed ones (like shapes or groups)
-      if (otherElements > 0) {
-        // Count different types of other elements
-        const shapeElements = layout.elements.filter(e => e.type === 'shape').length;
-        const groupElements = layout.elements.filter(e => e.type === 'group').length;
-        const unknownElements = otherElements - shapeElements - groupElements;
-        
-        // Only show "Other Elements" if there are actually non-image/chart elements
-        if (shapeElements > 0 || groupElements > 0 || unknownElements > 0) {
-          markdown += '### Other Elements\n\n';
-          
-          if (shapeElements > 0) {
-            markdown += `- ${shapeElements} shape(s)\n`;
-          }
-          if (groupElements > 0) {
-            markdown += `- ${groupElements} group(s)\n`;
-          }
-          if (unknownElements > 0) {
-            markdown += `- ${unknownElements} other element(s)\n`;
-          }
-          
-          markdown += '\n';
+          return value;
+        })
+        .join('\n');
+    }
+    for (const [index, slide] of slides.entries()) {
+      checkResources();
+      const rel = presentationRels.get(attr(slide, 'r:id') ?? '');
+      if (!rel || rel.external)
+        throw new InvalidFileError('PPTX slide relationship is missing');
+      const root = await readXml(source, rel.target, options.options);
+      if (!root) throw new InvalidFileError('PPTX slide is missing');
+      const rels = await relationships(source, rel.target, options.options);
+      output.push(`## Slide ${index + 1}`);
+      function render(node: XmlNode): string[] {
+        const name = localName(node.name);
+        if (name === 'sp')
+          return [textBody(child(node, 'txBody'))].filter(Boolean);
+        if (name === 'pic') {
+          if (options.extractImages === false) return [];
+          const id = attr(descendants(node, 'blip')[0], 'embed');
+          const imageRel = rels.get(id ?? '');
+          const reference =
+            imageRel && !imageRel.external
+              ? imageExtractor.getImageReference(imageRel.target)
+              : null;
+          return reference ? [reference] : [];
         }
-      }
-    }
-  } else {
-    // Standard text extraction without visual layouts
-    for (let i = 0; i < slideFiles.length; i++) {
-      const slideFile = slideFiles[i];
-      const slideNumber = i + 1;
-      
-      markdown += `## Slide ${slideNumber}\n\n`;
-      
-      const xmlContent = await slideFile.file.async('string');
-      const slideContent = await extractSlideTextContent(xmlContent, options.options);
-      
-      if (slideContent.trim()) {
-        markdown += `${slideContent}\n\n`;
-      } else {
-        markdown += '*No content*\n\n';
-      }
-      
-      // Embed images inline for this slide
-        if (extractedImages.length > 0) {
-          const imagesPerSlide = Math.ceil(extractedImages.length / slideFiles.length);
-          const startIndex = (slideNumber - 1) * imagesPerSlide;
-          const endIndex = Math.min(startIndex + imagesPerSlide, extractedImages.length);
-          const fallbackSlideImages = extractedImages.slice(startIndex, endIndex);
-
-
-          fallbackSlideImages.forEach((image, index) => {
-            const imageName = path.basename(image.savedPath);
-            markdown += `![Slide ${slideNumber} Image ${index + 1}](${path.posix.join(outputDir, imageName)})\n\n`;
-          });
+        if (name === 'graphicFrame') {
+          const table = descendants(node, 'tbl')[0];
+          if (table) {
+            const rows = children(table, 'tr').map((row) => ({
+              cells: children(row, 'tc').map(
+                (cell) =>
+                  ({
+                    text: textBody(child(cell, 'txBody')),
+                    bold: false,
+                    italic: false,
+                    alignment: 'left',
+                    // DrawingML includes continuation cells explicitly; keep each grid slot once.
+                    colSpan: 1,
+                    rowSpan: 1
+                  }) satisfies CellData
+              )
+            }));
+            return [layout.parseAdvancedTable({ rows })];
+          }
+          const chart = descendants(node, 'chart')[0];
+          const chartRel = rels.get(attr(chart, 'id') ?? '');
+          const data =
+            chartRel && !chartRel.external
+              ? charts.find((c) => c.originalPath === chartRel.target)
+              : undefined;
+          return data ? [chartExtractor.formatChartAsMarkdown(data.data)] : [];
         }
-      
-      // Add fallback chart processing for when visual parser is not available
-      if (extractedCharts.length > 0) {
-        extractedCharts.forEach((chart) => {
-          const chartMarkdown = chartExtractor.formatChartAsMarkdown(chart.data);
-          markdown += chartMarkdown;
-        });
+        return children(node).flatMap(render);
       }
+      output.push(...render(child(child(root, 'cSld'), 'spTree') ?? root));
     }
-  }
-  
-  return {
-    markdown: markdown.trim(),
-    images: extractedImages,
-    charts: extractedCharts.map(chart => chart.data),
-    slideCount: slideFiles.length,
-    metadata: {
-      totalSlides: slideFiles.length,
-      hasImages: extractedImages.length > 0,
-      hasCharts: extractedCharts.length > 0,
-      renderMethod: 'text-extraction',
-      hasVisualLayouts: visualLayouts !== undefined
-    }
-  };
-}
-
-/**
- * Extract PPTX title from document properties
- */
-async function extractPptxTitle(buffer: Buffer, securityOptions?: ConvertOptions): Promise<string | undefined> {
-  try {
-    const zip = await JSZip.loadAsync(buffer);
-    const corePropsFile = zip.file('docProps/core.xml');
-    
-    if (corePropsFile) {
-      const corePropsContent = await corePropsFile.async('string');
-
-      // Always use secure XML parsing to prevent XXE attacks
-      const secureXmlParser = createSecureXmlParser(securityOptions || {});
-      const result = await secureXmlParser(corePropsContent) as { 'cp:coreProperties'?: { 'dc:title'?: string[] }[] };
-      
-      // Try to extract title from core properties
-      const title = result?.['cp:coreProperties']?.[0]?.['dc:title']?.[0];
-      if (title && typeof title === 'string' && title.trim()) {
-        return title.trim();
+    return {
+      markdown: output.join('\n\n').trim(),
+      images,
+      charts: charts.map((c) => c.data),
+      slideCount: slides.length,
+      metadata: {
+        totalSlides: slides.length,
+        hasImages: images.length > 0,
+        hasCharts: charts.length > 0,
+        renderMethod: 'text-extraction'
       }
-    }
-  } catch {
-    // Ignore errors and return undefined
-  }
-  
-  return undefined;
-}
-
-/**
- * Extract text content from slide XML
- */
-async function extractSlideTextContent(
-  xmlContent: string,
-  securityOptions?: ConvertOptions
-): Promise<string> {
-  try {
-    // Always use secure XML parsing to prevent XXE attacks
-    const secureXmlParser = createSecureXmlParser(securityOptions || {});
-    const result = await secureXmlParser(xmlContent);
-    
-    // Simple text extraction function
-    function extractText(obj: unknown): string {
-      let text = '';
-      
-      if (typeof obj === 'object' && obj !== null) {
-        if (Array.isArray(obj)) {
-          for (const item of obj) {
-            text += extractText(item);
-          }
-        } else {
-          // Extract text content
-          if ((obj as { 'a:t'?: (string | { _: string })[] })['a:t']) {
-            if (Array.isArray((obj as { 'a:t': (string | { _: string })[] })['a:t'])) {
-              for (const textItem of (obj as { 'a:t': (string | { _: string })[] })['a:t']) {
-                if (typeof textItem === 'string') {
-                  text += `${textItem} `; 
-                } else if (textItem && typeof textItem === 'object' && '_' in textItem) {
-                  text += `${(textItem as { _: string })._} `; 
-                }
-              }
-            }
-          }
-          
-          // Recursively process nested objects
-          for (const key in (obj as Record<string, unknown>)) {
-            if (key !== 'a:t') {
-              text += extractText((obj as Record<string, unknown>)[key]);
-            }
-          }
-        }
-      }
-      
-      return text;
-    }
-    
-    // Extract all text content
-    const textContent = extractText(result).trim();
-    return textContent;
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('PPTX', `Failed to extract text content from slide: ${message}`, error as Error);
+    };
+  } catch (error) {
+    if (error instanceof ConversionError) throw error;
+    throw new ParseError(
+      'PPTX',
+      'Could not read the presentation',
+      error as Error
+    );
   }
 }
-

@@ -4,10 +4,10 @@ import type { Buffer } from 'node:buffer';
  * Options for document conversion
  */
 export interface ConvertOptions {
-  // EXISTING OPTIONS
+  // Conversion options
   /** Directory to save extracted images. Defaults to 'images' */
   readonly imageDir?: string;
-  /** Output directory for slide screenshots (PPTX). Falls back to imageDir if not specified. */
+  /** Output directory for extracted images. Overrides imageDir for every format. */
   readonly outputDir?: string;
   /** Whether to preserve document layout as much as possible. Defaults to true */
   readonly preserveLayout?: boolean;
@@ -17,13 +17,13 @@ export interface ConvertOptions {
   readonly extractImages?: boolean;
   /** Maximum number of pages to process for PDFs. Defaults to unlimited */
   readonly maxPages?: number;
-  
-  // SECURITY OPTIONS (New, backwards compatible)
+
+  // Resource limits
   /** Maximum file size in bytes. Defaults to 100MB for backwards compatibility */
   readonly maxFileSize?: number;
-  /** Maximum memory usage during processing in bytes. Defaults to 500MB */
+  /** Process heap budget in bytes. Also checks external memory and RSS. Defaults to 500MB */
   readonly maxMemoryUsage?: number;
-  /** Processing timeout in milliseconds. Defaults to 60 seconds */
+  /** Processing timeout in milliseconds. Cooperative for synchronous/native work. Defaults to 60 seconds */
   readonly timeout?: number;
   /** Maximum number of files that can be extracted from archives. Defaults to 1000 */
   readonly maxExtractedFiles?: number;
@@ -31,7 +31,7 @@ export interface ConvertOptions {
   readonly maxExtractedSize?: number;
   /** Maximum individual file size within archives in bytes. Defaults to 50MB */
   readonly maxIndividualFileSize?: number;
-  /** Whether to enable XXE (XML External Entity) protection. Defaults to true */
+  /** Retained for compatibility. DTDs and external entities are always rejected. */
   readonly enableXXEProtection?: boolean;
   /** Whether to enable strict path validation. Defaults to true */
   readonly enablePathValidation?: boolean;
@@ -97,7 +97,14 @@ export interface ChartData {
 /**
  * Supported chart types
  */
-export type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'area' | 'column' | 'unknown';
+export type ChartType =
+  | 'bar'
+  | 'line'
+  | 'pie'
+  | 'scatter'
+  | 'area'
+  | 'column'
+  | 'unknown';
 
 /**
  * Data series in a chart
@@ -177,7 +184,13 @@ export interface Position {
 /**
  * Layout element types
  */
-export type ElementType = 'text' | 'image' | 'table' | 'chart' | 'shape' | 'unknown';
+export type ElementType =
+  | 'text'
+  | 'image'
+  | 'table'
+  | 'chart'
+  | 'shape'
+  | 'unknown';
 
 /**
  * Layout element with positioning
@@ -267,4 +280,5 @@ export const SUPPORTED_MIME_TYPES = {
   HWPX: 'application/x-hwpx'
 } as const;
 
-export type SupportedMimeType = typeof SUPPORTED_MIME_TYPES[keyof typeof SUPPORTED_MIME_TYPES];
+export type SupportedMimeType =
+  (typeof SUPPORTED_MIME_TYPES)[keyof typeof SUPPORTED_MIME_TYPES];

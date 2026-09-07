@@ -7,11 +7,6 @@
     "allowSyntheticDefaultImports": true,
     "types": ["jest", "node"]
   },
-  "include": [
-    "tests/**/*",
-    "src/**/*"
-  ],
-  "exclude": [
-    "dist/**/*"
-  ]
+  "include": ["tests/**/*", "src/**/*"],
+  "exclude": ["dist/**/*"]
 }

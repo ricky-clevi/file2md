@@ -1,22 +1,31 @@
-import JSZip from 'jszip';
-import path from 'node:path';
-import type { Buffer } from 'node:buffer';
-
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
 import { LayoutParser } from '../utils/layout-parser.js';
-import { ParseError, InvalidFileError, SecurityError } from '../types/errors.js';
-import type { 
-  ImageData, 
-  ChartData, 
-  CellData, 
-  RowData, 
-  TableData,
-  TextAlignment,
-  ConvertOptions 
+import {
+  ConversionError,
+  InvalidFileError,
+  ParseError
+} from '../types/errors.js';
+import type {
+  ImageData,
+  ChartData,
+  ConvertOptions,
+  CellData,
+  TextAlignment
 } from '../types/interfaces.js';
-import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
-import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
+import { loadArchive, type Archive } from '../utils/zip-security.js';
+import {
+  readXml,
+  relationships,
+  child,
+  children,
+  descendants,
+  text,
+  attr,
+  localName,
+  type XmlNode
+} from '../utils/xml.js';
+import { escapeMarkdown, safeLink } from '../utils/markdown.js';
 
 export interface DocxParseOptions {
   readonly preserveLayout?: boolean;
@@ -24,7 +33,6 @@ export interface DocxParseOptions {
   readonly extractCharts?: boolean;
   readonly options?: ConvertOptions;
 }
-
 export interface DocxParseResult {
   readonly markdown: string;
   readonly images: readonly ImageData[];
@@ -32,427 +40,182 @@ export interface DocxParseResult {
   readonly metadata: Record<string, unknown>;
 }
 
-interface DocxBody {
-  readonly 'w:p'?: readonly unknown[];
-  readonly 'w:tbl'?: readonly unknown[];
-}
-
-// interface DocxDocument {
-//   readonly 'w:document': readonly [{
-//     readonly 'w:body': readonly [DocxBody];
-//   }];
-// }
-
-interface ParagraphData {
-  readonly text: string;
-  readonly bold: boolean;
-  readonly italic: boolean;
-  readonly alignment: TextAlignment;
-  readonly fontSize: number | string;
-  readonly isList: boolean;
-  readonly listLevel: number;
-}
-
-/**
- * Parse DOCX buffer and convert to markdown with layout preservation
- */
 export async function parseDocx(
   buffer: Buffer,
   imageExtractor: ImageExtractor,
   chartExtractor: ChartExtractor,
-  options: DocxParseOptions = {}
+  options: DocxParseOptions = {},
+  archive?: Archive
 ): Promise<DocxParseResult> {
   try {
-    // Create secure ZIP extractor if security options are provided
-    let secureExtractor: SecureZipExtractor | undefined;
-    if (options.options) {
-      const securityConfig = createZipSecurityConfig(options.options);
-      secureExtractor = new SecureZipExtractor(securityConfig);
-    }
-
-    const zip = await JSZip.loadAsync(buffer);
-    
-    // Validate ZIP archive for security if extractor is available
-    if (secureExtractor) {
-      try {
-        await secureExtractor.validate(zip);
-      } catch (error) {
-        if (error instanceof SecurityError) {
-          throw new SecurityError(
-            `DOCX security validation failed: ${error.message}`,
-            error.securityCode,
-            error.severity,
-            error
+    const source = archive ?? (await loadArchive(buffer, options.options));
+    const root = await readXml(source, 'word/document.xml', options.options);
+    const body = child(root, 'body');
+    if (!body) throw new InvalidFileError('DOCX is missing its document body');
+    const rels = await relationships(
+      source,
+      'word/document.xml',
+      options.options
+    );
+    const images =
+      options.extractImages === false
+        ? []
+        : await imageExtractor.extractImagesFromZip(
+            source.zip,
+            'word/',
+            options.options,
+            source.extractor
           );
+    const charts =
+      options.extractCharts === false
+        ? []
+        : await chartExtractor.extractChartsFromZip(
+            source.zip,
+            'word/',
+            options.options,
+            source.extractor
+          );
+    const numbering = await readXml(
+      source,
+      'word/numbering.xml',
+      options.options
+    );
+    const usedCharts = new Set<string>();
+    const layout = new LayoutParser();
+    const listCounters = new Map<string, number>();
+    function linkedAsset(id: string | undefined, chart: boolean): string {
+      const rel = id ? rels.get(id) : undefined;
+      if (!rel || rel.external) return '';
+      if (!chart) return imageExtractor.getImageReference(rel.target) ?? '';
+      const found = charts.find((c) => c.originalPath === rel.target);
+      if (!found || usedCharts.has(rel.target)) return '';
+      usedCharts.add(rel.target);
+      return `\n\n${chartExtractor.formatChartAsMarkdown(found.data)}`;
+    }
+    function inline(node: XmlNode): string {
+      const name = localName(node.name);
+      if (name === 't') return escapeMarkdown(text(node));
+      if (name === 'tab') return '\t';
+      if (name === 'br' || name === 'cr') return '  \n';
+      if (name === 'del' || name === 'instrText' || name.endsWith('Pr'))
+        return '';
+      if (name === 'blip' || name === 'imagedata')
+        return linkedAsset(attr(node, 'embed') ?? attr(node, 'id'), false);
+      if (name === 'chart') return linkedAsset(attr(node, 'id'), true);
+      let value = children(node).map(inline).join('');
+      if (name === 'r' && options.preserveLayout !== false) {
+        const properties = child(node, 'rPr');
+        const enabled = (key: string) => {
+          const prop = child(properties, key);
+          return (
+            !!prop && !['0', 'false', 'off'].includes(attr(prop, 'val') ?? '')
+          );
+        };
+        if (value.trim() && enabled('b')) value = `**${value}**`;
+        if (value.trim() && enabled('i')) value = `*${value}*`;
+      }
+      if (name === 'hyperlink') {
+        const rel = rels.get(attr(node, 'id') ?? '');
+        const url = rel?.external ? safeLink(rel.target) : undefined;
+        if (url && value) value = `[${value}](${url})`;
+      }
+      return value;
+    }
+    function paragraph(node: XmlNode): string {
+      let value = inline(node).trim();
+      if (!value || options.preserveLayout === false) return value;
+      const props = child(node, 'pPr');
+      const heading = attr(child(props, 'pStyle'), 'val')?.match(
+        /^heading\s*([1-6])$/i
+      );
+      if (heading) return `${'#'.repeat(Number(heading[1]))} ${value}`;
+      const num = child(props, 'numPr');
+      if (num) {
+        const id = attr(child(num, 'numId'), 'val') ?? '';
+        const level = Math.min(
+          8,
+          Math.max(0, Number(attr(child(num, 'ilvl'), 'val')) || 0)
+        );
+        const definition = children(numbering, 'num').find(
+          (n) => attr(n, 'numId') === id
+        );
+        const abstractId = attr(child(definition, 'abstractNumId'), 'val');
+        const abstract = children(numbering, 'abstractNum').find(
+          (n) => attr(n, 'abstractNumId') === abstractId
+        );
+        const lvl = children(abstract, 'lvl').find(
+          (n) => attr(n, 'ilvl') === String(level)
+        );
+        const format = attr(child(lvl, 'numFmt'), 'val');
+        const key = `${id}:${level}`;
+        const counter =
+          (listCounters.get(key) ??
+            (Number(attr(child(lvl, 'start'), 'val')) || 1) - 1) + 1;
+        listCounters.set(key, counter);
+        value = `${'  '.repeat(level)}${format && format !== 'bullet' ? `${counter}.` : '-'} ${value}`;
+      }
+      return value;
+    }
+    function table(node: XmlNode): string {
+      const rows = children(node, 'tr').map((row) => ({
+        cells: children(row, 'tc').map((cell) => {
+          const props = child(cell, 'tcPr');
+          const alignment =
+            attr(child(child(child(cell, 'p'), 'pPr'), 'jc'), 'val') ?? 'left';
+          return {
+            text: blocks(cell).join('\n'),
+            bold: false,
+            italic: false,
+            alignment: (['left', 'center', 'right', 'justify'].includes(
+              alignment
+            )
+              ? alignment
+              : 'left') as TextAlignment,
+            colSpan: Math.min(
+              1000,
+              Number(attr(child(props, 'gridSpan'), 'val')) || 1
+            ),
+            rowSpan: 1,
+            backgroundColor:
+              options.preserveLayout === false
+                ? undefined
+                : attr(child(props, 'shd'), 'fill')
+          } satisfies CellData;
+        })
+      }));
+      return layout.parseAdvancedTable(
+        { rows },
+        {
+          preserveAlignment: options.preserveLayout !== false,
+          preserveColors: options.preserveLayout !== false
         }
-        throw error;
-      }
+      );
     }
-    
-    const documentXml = zip.file('word/document.xml');
-    
-    if (!documentXml) {
-      throw new InvalidFileError('Invalid DOCX file: missing document.xml');
+    function blocks(node: XmlNode): string[] {
+      return children(node)
+        .flatMap((c) => {
+          const name = localName(c.name);
+          if (name === 'p') return [paragraph(c)];
+          if (name === 'tbl') return [table(c)];
+          return name === 'sdt' || name === 'sdtContent' ? blocks(c) : [];
+        })
+        .filter(Boolean);
     }
-    
-    // Extract images first
-    const extractedImages = options.extractImages !== false 
-      ? await imageExtractor.extractImagesFromZip(zip, 'word/', options.options)
-      : [];
-    
-    // Extract charts if enabled
-    const extractedCharts = options.extractCharts !== false
-      ? await chartExtractor.extractChartsFromZip(zip, 'word/', options.options)
-      : [];
-    
-    // Initialize layout parser
-    const layoutParser = new LayoutParser();
-    
-    const xmlContent = await documentXml.async('string');
-
-    // Always parse XML securely to prevent XXE attacks
-    const secureXmlParser = createSecureXmlParser(options.options || {});
-    const result = await secureXmlParser(xmlContent) as Record<string, unknown>;
-    
-    // Handle both array and non-array XML parsing results
-    // The structure should be: result['w:document'] -> document element
-    let document: { 'w:body': readonly [DocxBody] } | undefined;
-    
-    if (result['w:document']) {
-      // If w:document exists directly
-      document = Array.isArray(result['w:document']) ? result['w:document'][0] : result['w:document'];
-    } else if (result['w:body']) {
-      // If w:body is at the top level (no document wrapper), create a synthetic document
-      const bodyNode = result['w:body'];
-      document = {
-        'w:body': Array.isArray(bodyNode)
-          ? (bodyNode as [DocxBody])
-          : [bodyNode as DocxBody]
-      };
-    } else {
-      // Check if document exists under a different key
-      throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document element', new Error('Missing document element'));
-    }
-    
-    
-    const body: DocxBody | undefined = document['w:body']?.[0];
-    
-    if (!body) {
-      throw new ParseError('DOCX', 'Invalid DOCX structure - Missing document body', new Error('Missing document body'));
-    }
-    let markdown = '';
-    
-    // Process paragraphs
-    for (const element of body['w:p'] || []) {
-      const paragraph = await parseParagraph(element, imageExtractor, extractedImages);
-      if (paragraph.trim()) {
-        markdown += `${paragraph}\n\n`;
-      }
-    }
-    
-    // Process tables
-    for (const table of body['w:tbl'] || []) {
-      const tableMarkdown = await parseAdvancedTable(table, layoutParser, imageExtractor, extractedImages);
-      if (tableMarkdown.trim()) {
-        markdown += `${tableMarkdown}\n\n`;
-      }
-    }
-    
+    const output = blocks(body);
+    for (const chart of charts)
+      if (!usedCharts.has(chart.originalPath))
+        output.push(chartExtractor.formatChartAsMarkdown(chart.data));
     return {
-      markdown: markdown.trim(),
-      images: extractedImages,
-      charts: extractedCharts.map(chart => chart.data),
+      markdown: output.join('\n\n').trim(),
+      images,
+      charts: charts.map((c) => c.data),
       metadata: {
-        paragraphCount: (body['w:p'] || []).length,
-        tableCount: (body['w:tbl'] || []).length
+        paragraphCount: descendants(body, 'p').length,
+        tableCount: descendants(body, 'tbl').length
       }
     };
-  } catch (error: unknown) {
-    if (error instanceof InvalidFileError) {
-      throw error;
-    }
-    
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('DOCX', message, error as Error);
+  } catch (error) {
+    if (error instanceof ConversionError) throw error;
+    throw new ParseError('DOCX', 'Could not read the document', error as Error);
   }
-}
-
-async function parseAdvancedTable(
-  table: unknown,
-  layoutParser: LayoutParser,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[]
-): Promise<string> {
-  const tableData = table as { 'w:tr'?: readonly unknown[] };
-  const rows = tableData['w:tr'] || [];
-  if (rows.length === 0) return '';
-
-  const tableStruct: TableData = { rows: [] };
-  
-  for (const row of rows) {
-    const cells = (row as { 'w:tc'?: readonly unknown[] })['w:tc'] || [];
-    const rowData: RowData = { cells: [] };
-    
-    for (const cell of cells) {
-      const cellData: CellData = {
-        text: '',
-        bold: false,
-        italic: false,
-        alignment: 'left' as TextAlignment,
-        backgroundColor: undefined,
-        colSpan: 1,
-        rowSpan: 1,
-        merged: false
-      };
-      
-      // Extract cell properties
-      const tcPr = (cell as { 'w:tcPr'?: readonly { 'w:gridSpan'?: readonly { $: { val: string } }[], 'w:vMerge'?: readonly unknown[], 'w:shd'?: readonly { $: { fill: string } }[] }[] })['w:tcPr'];
-      if (tcPr?.[0]) {
-        // Check for merged cells
-        if (tcPr[0]['w:gridSpan']) {
-          cellData.colSpan = parseInt(tcPr[0]['w:gridSpan'][0].$.val, 10) || 1;
-        }
-        if (tcPr[0]['w:vMerge']) {
-          cellData.merged = true;
-        }
-        
-        // Check for background color
-        if (tcPr[0]['w:shd']?.[0]?.$.fill) {
-          cellData.backgroundColor = tcPr[0]['w:shd'][0].$.fill;
-        }
-      }
-      
-      // Extract cell content
-      const cellContent = (cell as { 'w:p'?: readonly unknown[] });
-      if (cellContent['w:p']) {
-        const cellTexts: string[] = [];
-        for (const paragraph of cellContent['w:p']) {
-          const paragraphData = await parseAdvancedParagraph(paragraph, imageExtractor, extractedImages);
-          if (paragraphData.text.trim()) {
-            cellTexts.push(paragraphData.text);
-            
-            // Inherit formatting from paragraph
-            if (paragraphData.bold) cellData.bold = true;
-            if (paragraphData.italic) cellData.italic = true;
-            if (paragraphData.alignment !== 'left') cellData.alignment = paragraphData.alignment;
-          }
-        }
-        cellData.text = cellTexts.join(' ');
-      }
-      
-      rowData.cells.push(cellData);
-    }
-    
-    tableStruct.rows.push(rowData);
-  }
-  
-  return layoutParser.parseAdvancedTable(tableStruct, {
-    preserveAlignment: true,
-    showBorders: true,
-    preserveColors: true
-  });
-}
-
-async function parseAdvancedParagraph(
-  paragraph: unknown,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[]
-): Promise<ParagraphData> {
-  const para = paragraph as { 'w:pPr'?: readonly { 'w:jc'?: readonly { $: { val: string } }[], 'w:numPr'?: readonly { 'w:ilvl'?: readonly { $: { val: string } }[] }[], 'w:pStyle'?: readonly { $: { val: string } }[] }[], 'w:r'?: readonly unknown[] };
-  let text = '';
-  let bold = false;
-  let italic = false;
-  let alignment: TextAlignment = 'left';
-  let fontSize: number | string = 'normal';
-  let isList = false;
-  let listLevel = 0;
-  
-  // Check paragraph properties
-  const pPr = para['w:pPr'];
-  if (pPr?.[0]) {
-    // Check alignment
-    if (pPr[0]['w:jc']?.[0]?.$.val) {
-      const alignValue = pPr[0]['w:jc'][0].$.val;
-      alignment = (['left', 'center', 'right', 'justify'].includes(alignValue) 
-        ? alignValue 
-        : 'left') as TextAlignment;
-    }
-    
-    // Check if it's a list
-    if (pPr[0]['w:numPr']) {
-      isList = true;
-      if (pPr[0]['w:numPr'][0]['w:ilvl']) {
-        listLevel = parseInt(pPr[0]['w:numPr'][0]['w:ilvl'][0].$.val, 10) || 0;
-      }
-    }
-  }
-  
-  if (para['w:r']) {
-    for (const run of para['w:r']) {
-      // Check for images/drawings
-      if ((run as { 'w:drawing'?: unknown, 'w:pict'?: unknown })['w:drawing'] || (run as { 'w:drawing'?: unknown, 'w:pict'?: unknown })['w:pict']) {
-        const imageRef = await extractImageFromRun(run, imageExtractor, extractedImages);
-        if (imageRef) {
-          text += `${imageRef}\n`;
-        }
-      }
-      
-      // Extract text with formatting
-      const textContent = (run as { 'w:t'?: readonly (string | { _: string })[] });
-      if (textContent['w:t']) {
-        let runText = '';
-        for (const textElement of textContent['w:t']) {
-          if (typeof textElement === 'string') {
-            runText += textElement;
-          } else if (textElement && typeof textElement === 'object' && '_' in textElement) {
-            runText += (textElement as { _: string })._;
-          }
-        }
-        
-        // Apply formatting
-        const rPr = (run as { 'w:rPr'?: readonly { 'w:b'?: unknown, 'w:i'?: unknown, 'w:sz'?: readonly { $: { val: string } }[] }[] })['w:rPr']?.[0];
-        if (rPr) {
-          if (rPr['w:b']) {
-            runText = `**${runText}**`;
-            bold = true;
-          }
-          if (rPr['w:i']) {
-            runText = `*${runText}*`;
-            italic = true;
-          }
-          if (rPr['w:sz']?.[0]?.$.val) {
-            fontSize = parseInt(rPr['w:sz'][0].$.val, 10) / 2; // Convert half-points to points
-          }
-        }
-        
-        text += runText;
-      }
-    }
-  }
-  
-  // Apply list formatting
-  if (isList && text.trim()) {
-    const indent = '  '.repeat(listLevel);
-    text = `${indent}- ${text.trim()}`;
-  }
-  
-  // Apply heading formatting
-  if (pPr?.[0]?.['w:pStyle']?.[0]?.$.val) {
-    const styleVal = pPr[0]['w:pStyle'][0].$.val;
-    if (styleVal && (styleVal.includes('Heading') || styleVal.includes('heading'))) {
-      const match = styleVal.match(/(\d+)/);
-      if (match) {
-        const headingLevel = parseInt(match[1], 10);
-        const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        text = `${hashes} ${text.trim()}`;
-      }
-    }
-  }
-  
-  // Apply font size formatting
-  if (fontSize !== 'normal' && text.trim()) {
-    const layoutParser = new LayoutParser();
-    text = layoutParser.formatWithSize(text, fontSize);
-  }
-  
-  return {
-    text,
-    bold,
-    italic,
-    alignment,
-    fontSize,
-    isList,
-    listLevel
-  };
-}
-
-async function parseParagraph(
-  paragraph: unknown,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[]
-): Promise<string> {
-  const advancedData = await parseAdvancedParagraph(paragraph, imageExtractor, extractedImages);
-  return advancedData.text;
-}
-
-async function extractImageFromRun(
-  run: unknown,
-  imageExtractor: ImageExtractor,
-  extractedImages: readonly ImageData[]
-): Promise<string | null> {
-  const runData = run as {
-    'w:drawing'?: readonly [{
-      'wp:inline'?: readonly [{
-        'a:graphic'?: readonly [{
-          'a:graphicData'?: readonly [{
-            'pic:pic'?: readonly [{
-              'pic:blipFill'?: readonly [{
-                'a:blip'?: readonly [{ $?: { 'r:embed'?: string } }];
-              }];
-            }];
-          }];
-        }];
-      }];
-    }];
-    'w:pict'?: readonly [{
-      'v:shape'?: readonly [{
-        'v:imagedata'?: readonly [{ $?: { 'r:id'?: string } }];
-      }];
-    }];
-  };
-
-  let imageId: string | null = null;
-
-  // Try to extract image relationship ID from drawing
-  if (runData['w:drawing']) {
-    const drawing = runData['w:drawing'][0];
-    const inline = drawing['wp:inline']?.[0];
-    const graphic = inline?.['a:graphic']?.[0];
-    const graphicData = graphic?.['a:graphicData']?.[0];
-    const pic = graphicData?.['pic:pic']?.[0];
-    const blipFill = pic?.['pic:blipFill']?.[0];
-    const blip = blipFill?.['a:blip']?.[0];
-    
-    if (blip?.$?.['r:embed']) {
-      imageId = blip.$['r:embed'];
-    }
-  }
-  
-  // Try to extract from legacy picture format
-  if (!imageId && runData['w:pict']) {
-    const pict = runData['w:pict'][0];
-    const shape = pict['v:shape']?.[0];
-    const imageData = shape?.['v:imagedata']?.[0];
-    
-    if (imageData?.$?.['r:id']) {
-      imageId = imageData.$['r:id'];
-    }
-  }
-
-  if (imageId) {
-    // Find the matching image by relationship ID or original path
-    const matchingImage = extractedImages.find(img => 
-      img.originalPath.includes(imageId) || 
-      img.originalPath.endsWith(`${imageId}.png`) ||
-      img.originalPath.endsWith(`${imageId}.jpg`) ||
-      img.originalPath.endsWith(`${imageId}.jpeg`) ||
-      img.originalPath.includes('image')
-    );
-    
-    if (matchingImage && matchingImage.savedPath) {
-      const filename = path.basename(matchingImage.savedPath);
-      return imageExtractor.getImageMarkdown('Document Image', filename);
-    }
-  }
-  
-  // Fallback: if we have images but couldn't match, use the first available one
-  if (extractedImages.length > 0) {
-    const img = extractedImages.find(img => img.savedPath);
-    if (img) {
-      const filename = path.basename(img.savedPath);
-      return imageExtractor.getImageMarkdown('Document Image', filename);
-    }
-  }
-  
-  return null;
 }

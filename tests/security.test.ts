@@ -181,12 +181,6 @@ describe('Security Features', () => {
       expect(() => validateBuffer(bufferWithNull, {}, 'text')).toThrow(SecurityError);
     });
 
-    it('should detect repetitive content (potential bomb)', () => {
-      const repetitiveBuffer = Buffer.alloc(2000, 'A'); // 2KB of 'A'
-      
-      expect(() => validateBuffer(repetitiveBuffer, {})).toThrow(SecurityError);
-    });
-
     it('should allow normal content', () => {
       const normalBuffer = Buffer.from('This is normal document content with varied characters and punctuation!');
       

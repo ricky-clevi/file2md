@@ -1,308 +1,282 @@
+import type { Readable } from 'node:stream';
 import path from 'node:path';
-import type JSZip from 'jszip';
-import { 
-  SecurityError, 
-  ResourceLimitError, 
-  PathTraversalError, 
-  MaliciousContentError 
+import { randomUUID } from 'node:crypto';
+import JSZip from 'jszip';
+import {
+  SecurityError,
+  ResourceLimitError,
+  PathTraversalError,
+  MaliciousContentError
 } from '../types/errors.js';
 import type { ConvertOptions } from '../types/interfaces.js';
+import { checkResources } from './resource-monitor.js';
 
-/**
- * Security configuration for ZIP extraction
- */
 export interface ZipSecurityConfig {
-  /** Maximum total extracted size in bytes */
   readonly maxExtractedSize: number;
-  /** Maximum number of files in archive */
   readonly maxFiles: number;
-  /** Maximum individual file size in bytes */
   readonly maxFileSize: number;
-  /** Maximum compression ratio (uncompressed/compressed) */
   readonly maxCompressionRatio: number;
-  /** Enable path validation */
   readonly validatePaths: boolean;
 }
-
-/**
- * Default security configuration - conservative for backwards compatibility
- */
 export const DEFAULT_ZIP_SECURITY_CONFIG: ZipSecurityConfig = {
-  maxExtractedSize: 500 * 1024 * 1024,  // 500MB total
-  maxFiles: 1000,                        // Max 1000 files
-  maxFileSize: 50 * 1024 * 1024,        // 50MB per file
-  maxCompressionRatio: 100,              // 100:1 max compression
+  maxExtractedSize: 500 * 1024 * 1024,
+  maxFiles: 1000,
+  maxFileSize: 50 * 1024 * 1024,
+  maxCompressionRatio: 100,
   validatePaths: true
 };
-
-/**
- * Strict security configuration for high-security environments
- */
 export const STRICT_ZIP_SECURITY_CONFIG: ZipSecurityConfig = {
-  maxExtractedSize: 100 * 1024 * 1024,  // 100MB total
-  maxFiles: 500,                         // Max 500 files
-  maxFileSize: 10 * 1024 * 1024,        // 10MB per file
-  maxCompressionRatio: 50,               // 50:1 max compression
+  maxExtractedSize: 100 * 1024 * 1024,
+  maxFiles: 500,
+  maxFileSize: 10 * 1024 * 1024,
+  maxCompressionRatio: 50,
   validatePaths: true
 };
-
-/**
- * Create security configuration from ConvertOptions
- */
-export function createZipSecurityConfig(options: ConvertOptions): ZipSecurityConfig {
+export function createZipSecurityConfig(
+  options: ConvertOptions
+): ZipSecurityConfig {
   return {
-    maxExtractedSize: options.maxExtractedSize ?? DEFAULT_ZIP_SECURITY_CONFIG.maxExtractedSize,
+    maxExtractedSize:
+      options.maxExtractedSize ?? DEFAULT_ZIP_SECURITY_CONFIG.maxExtractedSize,
     maxFiles: options.maxExtractedFiles ?? DEFAULT_ZIP_SECURITY_CONFIG.maxFiles,
-    maxFileSize: options.maxIndividualFileSize ?? DEFAULT_ZIP_SECURITY_CONFIG.maxFileSize,
+    maxFileSize:
+      options.maxIndividualFileSize ?? DEFAULT_ZIP_SECURITY_CONFIG.maxFileSize,
     maxCompressionRatio: DEFAULT_ZIP_SECURITY_CONFIG.maxCompressionRatio,
     validatePaths: options.enablePathValidation !== false
   };
 }
-
-/**
- * Sanitize filename to prevent path traversal
- */
 export function sanitizeFilename(filename: string): string {
-  if (!filename || typeof filename !== 'string') {
-    throw new PathTraversalError('Invalid filename: empty or non-string');
+  if (!filename || typeof filename !== 'string')
+    throw new PathTraversalError('Invalid filename');
+  const base = path.posix.basename(filename.replace(/\\/g, '/'));
+  const safe = [...base]
+    .map((c) =>
+      c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || /[<>:"/\\|?*]/.test(c)
+        ? '_'
+        : c
+    )
+    .join('')
+    .replace(/^\.+|[. ]+$/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 180);
+  let bounded = '';
+  for (const character of safe) {
+    if (Buffer.byteLength(bounded + character) > 120) break;
+    bounded += character;
   }
-
-  // Remove any path separators and get just the filename
-  const baseName = path.basename(filename);
-  
-  // Remove dangerous characters and sequences
-  const sanitized = baseName
-    .replace(/[<>:"/\\|?*\0-\x1f\x80-\x9f]/g, '_')  // Remove dangerous chars
-    .replace(/^\.+/, '')                              // Remove leading dots
-    .replace(/\.+$/, '')                              // Remove trailing dots
-    .replace(/\s+/g, '_')                            // Replace spaces with underscores
-    .substring(0, 255);                              // Limit length
-
-  // Ensure we have a valid filename
-  if (!sanitized || sanitized === '.' || sanitized === '..') {
-    return `safe_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-  }
-
-  return sanitized;
+  return bounded &&
+    !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(bounded)
+    ? bounded
+    : `image-${randomUUID()}`;
 }
-
-/**
- * Validate file path for security issues
- */
-export function validateFilePath(filePath: string): void {
-  if (!filePath || typeof filePath !== 'string') {
-    throw new PathTraversalError('Invalid file path: empty or non-string');
+export function validateFilePath(filename: string): void {
+  if (
+    !filename ||
+    typeof filename !== 'string' ||
+    [...filename].some((c) => c.charCodeAt(0) < 32)
+  ) {
+    throw new PathTraversalError('Invalid archive path');
   }
-
-  // Check for path traversal attempts BEFORE normalization
-  if (filePath.includes('..')) {
-    throw new PathTraversalError(`Path traversal attempt detected: ${filePath}`);
-  }
-
-  // Check for path traversal attempts after normalization too
-  const normalizedPath = path.normalize(filePath);
-  
-  if (normalizedPath.includes('..')) {
-    throw new PathTraversalError(`Path traversal attempt detected: ${filePath}`);
-  }
-  
-  if (normalizedPath.startsWith('/') || normalizedPath.match(/^[a-zA-Z]:/)) {
-    throw new PathTraversalError(`Absolute path not allowed: ${filePath}`);
-  }
-  
-  // Check for dangerous paths
-  const dangerousPaths = [
-    '/etc/', '/bin/', '/usr/', '/var/', '/sys/', '/proc/',
-    'C:\\Windows\\', 'C:\\Program Files\\', 'C:\\Users\\',
-    '\\\\', 'CON', 'PRN', 'AUX', 'NUL'
-  ];
-  
-  const upperPath = filePath.toUpperCase();
-  for (const dangerous of dangerousPaths) {
-    if (upperPath.includes(dangerous.toUpperCase())) {
-      throw new PathTraversalError(`Dangerous path detected: ${filePath}`);
-    }
+  const normalized = filename.replace(/\\/g, '/');
+  if (
+    normalized.startsWith('/') ||
+    /^[a-z]:/i.test(normalized) ||
+    normalized
+      .split('/')
+      .some(
+        (segment) =>
+          segment === '..' ||
+          /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment) ||
+          segment.includes(':')
+      )
+  ) {
+    throw new PathTraversalError(filename);
   }
 }
 
-/**
- * Calculate compression ratio to detect zip bombs
- */
-function calculateCompressionRatio(compressedSize: number, uncompressedSize: number): number {
-  if (compressedSize <= 0) return 0;
-  return uncompressedSize / compressedSize;
+function limit(resource: string, actual: number, maximum: number): void {
+  if (!Number.isFinite(maximum) || maximum <= 0)
+    throw new SecurityError(`Invalid limit for ${resource}`, 'INVALID_LIMIT');
+  if (actual > maximum) throw new ResourceLimitError(resource, maximum, actual);
 }
 
-/**
- * Validate ZIP archive before extraction to prevent zip bombs
- */
-export async function validateZipArchive(zip: JSZip, config: ZipSecurityConfig): Promise<void> {
-  let totalUncompressedSize = 0;
-  let fileCount = 0;
+// JSZip 3.x retains central-directory sizes on loaded entries. Keep this optional:
+// programmatically constructed entries use the bounded stream fallback below.
+function sizes(
+  file: JSZip.JSZipObject
+): { compressedSize: number; uncompressedSize: number } | undefined {
+  const data = (
+    file as unknown as {
+      _data?: { compressedSize?: number; uncompressedSize?: number };
+    }
+  )._data;
+  if (
+    typeof data?.compressedSize === 'number' &&
+    typeof data.uncompressedSize === 'number'
+  ) {
+    if (
+      !Number.isSafeInteger(data.compressedSize) ||
+      !Number.isSafeInteger(data.uncompressedSize) ||
+      data.compressedSize < 0 ||
+      data.uncompressedSize < 0
+    ) {
+      throw new SecurityError('Invalid ZIP entry size', 'INVALID_ARCHIVE');
+    }
+    return {
+      compressedSize: data.compressedSize,
+      uncompressedSize: data.uncompressedSize
+    };
+  }
+  return undefined;
+}
 
-  // First pass: validate structure without extracting
-  for (const [relativePath, file] of Object.entries(zip.files)) {
-    // Skip directories
-    if (file.dir) continue;
-    
-    fileCount++;
-    
-    // Check file count limit
-    if (fileCount > config.maxFiles) {
-      throw new ResourceLimitError(
-        'archive file count',
-        config.maxFiles,
-        fileCount
-      );
-    }
-    
-    // Validate file path if enabled
-    if (config.validatePaths) {
-      validateFilePath(relativePath);
-    }
-    
-    // Get compressed and uncompressed sizes
-    // Note: JSZip doesn't expose internal _data properties reliably
-    // We'll use file content length as approximation for security checks
-    const fileContent = await file.async('nodebuffer');
-    const compressedSize = fileContent.length; // Approximation
-    const uncompressedSize = fileContent.length; // Will be the same after decompression
-    
-    // Check individual file size
-    if (uncompressedSize > config.maxFileSize) {
-      throw new ResourceLimitError(
-        'individual file size',
-        config.maxFileSize,
-        uncompressedSize
-      );
-    }
-    
-    // Check compression ratio for zip bomb detection
-    if (compressedSize > 0) {
-      const ratio = calculateCompressionRatio(compressedSize, uncompressedSize);
-      if (ratio > config.maxCompressionRatio) {
-        throw new MaliciousContentError(
-          'ZIP archive',
-          `Suspicious compression ratio ${ratio.toFixed(1)}:1 for ${relativePath} (max: ${config.maxCompressionRatio}:1)`
-        );
+async function readBounded(
+  file: JSZip.JSZipObject,
+  maximum: number,
+  collect: boolean
+): Promise<{ size: number; data: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const stream = file.nodeStream('nodebuffer') as Readable;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    stream.on('error', reject);
+    stream.on('data', (chunk: Buffer) => {
+      try {
+        checkResources();
+        size += chunk.length;
+        limit('extracted file size', size, maximum);
+        if (collect) chunks.push(chunk);
+      } catch (error) {
+        stream.pause();
+        stream.destroy();
+        reject(error);
       }
-    }
-    
-    totalUncompressedSize += uncompressedSize;
-    
-    // Check total extracted size
-    if (totalUncompressedSize > config.maxExtractedSize) {
-      throw new ResourceLimitError(
-        'total extracted size',
-        config.maxExtractedSize,
-        totalUncompressedSize
-      );
-    }
-  }
+    });
+    stream.on('end', () =>
+      resolve({
+        size,
+        data: collect ? Buffer.concat(chunks, size) : Buffer.alloc(0)
+      })
+    );
+  });
+}
 
-  // Additional validation: check for zip bomb signatures
-  if (fileCount > 0) {
-    const averageCompressionRatio = totalUncompressedSize / Object.keys(zip.files).length;
-    
-    if (averageCompressionRatio > config.maxCompressionRatio * 0.8) {
+export async function validateZipArchive(
+  zip: JSZip,
+  config: ZipSecurityConfig
+): Promise<void> {
+  let total = 0;
+  let count = 0;
+  // Validate every original name; JSZip normalizes traversal out of file.name.
+  for (const [name, file] of Object.entries(zip.files)) {
+    checkResources();
+    if (config.validatePaths) {
+      validateFilePath(name);
+      const original = (
+        file as JSZip.JSZipObject & { unsafeOriginalName?: string }
+      ).unsafeOriginalName;
+      if (original) validateFilePath(original);
+    }
+    limit('archive file count', ++count, config.maxFiles);
+    if (file.dir) continue;
+    const info = sizes(file);
+    const size =
+      info?.uncompressedSize ??
+      (
+        await readBounded(
+          file,
+          Math.min(config.maxFileSize, config.maxExtractedSize - total),
+          false
+        )
+      ).size;
+    limit('individual file size', size, config.maxFileSize);
+    total += size;
+    limit('total extracted size', total, config.maxExtractedSize);
+    if (
+      info &&
+      size > 0 &&
+      size / Math.max(info.compressedSize, 1) > config.maxCompressionRatio
+    ) {
       throw new MaliciousContentError(
         'ZIP archive',
-        `Archive shows zip bomb characteristics (avg ratio: ${averageCompressionRatio.toFixed(1)}:1)`
+        `Compression ratio exceeds ${config.maxCompressionRatio}:1`
       );
     }
   }
 }
 
-/**
- * Securely extract file from ZIP with validation
- */
 export async function secureExtractFile(
   file: JSZip.JSZipObject,
   filename: string,
   config: ZipSecurityConfig
 ): Promise<Buffer> {
-  try {
-    // Validate filename
-    if (config.validatePaths) {
-      validateFilePath(filename);
-    }
-    
-    // Extract with size validation
-    const data = await file.async('nodebuffer');
-    
-    if (data.length > config.maxFileSize) {
-      throw new ResourceLimitError(
-        'extracted file size',
-        config.maxFileSize,
-        data.length
-      );
-    }
-    
-    return data;
-    
-  } catch (error) {
-    if (error instanceof SecurityError) {
-      throw error;
-    }
-    
-    throw new SecurityError(
-      `Failed to securely extract file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'EXTRACTION_FAILED',
-      'high',
-      error instanceof Error ? error : undefined
-    );
-  }
+  if (config.validatePaths) validateFilePath(filename);
+  return (await readBounded(file, config.maxFileSize, true)).data;
 }
 
-/**
- * Comprehensive ZIP security wrapper
- * Validates archive and provides secure extraction methods
- */
 export class SecureZipExtractor {
-  private readonly config: ZipSecurityConfig;
-  private validated = false;
-
-  constructor(config: ZipSecurityConfig) {
-    this.config = config;
-  }
-
-  /**
-   * Validate ZIP archive (must be called before extraction)
-   */
+  private files = new Set<JSZip.JSZipObject>();
+  private pending = new Map<JSZip.JSZipObject, Promise<Buffer>>();
+  private extractedSize = 0;
+  constructor(private readonly config: ZipSecurityConfig) {}
   async validate(zip: JSZip): Promise<void> {
+    this.files.clear();
+    this.pending.clear();
+    this.extractedSize = 0;
     await validateZipArchive(zip, this.config);
-    this.validated = true;
+    this.files = new Set(Object.values(zip.files));
   }
-
-  /**
-   * Securely extract a file from the ZIP
-   */
-  async extractFile(file: JSZip.JSZipObject, filename: string): Promise<Buffer> {
-    if (!this.validated) {
-      throw new SecurityError('ZIP archive must be validated before extraction', 'NOT_VALIDATED');
+  async extractFile(
+    file: JSZip.JSZipObject,
+    filename: string
+  ): Promise<Buffer> {
+    if (!this.files.has(file))
+      throw new SecurityError(
+        'Entry is not part of the validated archive',
+        'NOT_VALIDATED'
+      );
+    checkResources();
+    if (!this.pending.has(file)) {
+      this.pending.set(
+        file,
+        (async () => {
+          const data = await secureExtractFile(file, filename, this.config);
+          this.extractedSize += data.length;
+          limit(
+            'total extracted size',
+            this.extractedSize,
+            this.config.maxExtractedSize
+          );
+          return data;
+        })()
+      );
     }
-    
-    return secureExtractFile(file, filename, this.config);
+    const result = this.pending.get(file);
+    if (!result) throw new SecurityError('Missing extraction result');
+    return result;
   }
-
-  /**
-   * Get sanitized filename for safe storage
-   */
   sanitizeFilename(filename: string): string {
     return sanitizeFilename(filename);
   }
-
-  /**
-   * Check if path is safe for extraction
-   */
-  isPathSafe(filePath: string): boolean {
+  isPathSafe(filename: string): boolean {
     try {
-      if (this.config.validatePaths) {
-        validateFilePath(filePath);
-      }
+      if (this.config.validatePaths) validateFilePath(filename);
       return true;
     } catch {
       return false;
     }
   }
+}
+export interface Archive {
+  zip: JSZip;
+  extractor: SecureZipExtractor;
+}
+export async function loadArchive(
+  buffer: Buffer,
+  options: ConvertOptions = {}
+): Promise<Archive> {
+  const zip = await JSZip.loadAsync(buffer);
+  const extractor = new SecureZipExtractor(createZipSecurityConfig(options));
+  await extractor.validate(zip);
+  return { zip, extractor };
 }

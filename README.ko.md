@@ -1,401 +1,173 @@
 # file2md
 
-[![npm version](https://badge.fury.io/js/file2md.svg)](https://badge.fury.io/js/file2md)
-[![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-다양한 문서 형식(PDF, DOCX, XLSX, PPTX, HWP, HWPX)을 **고급 레이아웃 보존**, **이미지 추출**, **차트 변환**, **한국어 문서 지원** 기능과 함께 마크다운으로 변환하는 현대적인 TypeScript 라이브러리입니다.
+PDF, DOCX, XLSX, PPTX, HWP, HWPX 문서를 Node.js에서 Markdown으로 변환합니다.
+Markdown 문자열, 추출한 이미지 경로, 차트 데이터, 처리 메타데이터를 반환합니다.
 
 [English](README.md) | **한국어**
 
-## ✨ 주요 기능
+## 설치
 
-- 🔄 **다양한 형식 지원**: PDF, DOCX, XLSX, PPTX, HWP, HWPX
-- 🎨 **레이아웃 보존**: 문서 구조, 표, 서식 유지
-- 🖼️ **이미지 추출**: DOCX, PPTX, XLSX, HWP 문서에서 포함된 이미지 추출
-- 📊 **차트 변환**: 차트를 마크다운 표로 변환
-- 📝 **목록 및 표 지원**: 중첩된 목록과 복잡한 표 지원
-- 🌏 **한국어 문서 지원**: HWP/HWPX 한국어 문서 형식 완전 지원
-- 🔒 **타입 안전성**: 포괄적인 타입을 제공하는 완전한 TypeScript 지원
-- ⚡ **현대적 ESM**: CommonJS 호환성을 갖춘 ES2022 모듈
-- 🚀 **무설정**: 별도 설정 없이 바로 사용 가능
-- 📄 **PDF 텍스트 추출**: 레이아웃 감지가 포함된 향상된 텍스트 추출
+**Node.js 20.9 이상**이 필요합니다.
 
-## 📦 설치
-
-```bash
+```sh
 npm install file2md
 ```
 
-## 🚀 빠른 시작
+## 사용법
 
-### TypeScript / ES 모듈
-
-```typescript
+```ts
 import { convert } from 'file2md';
 
-// 파일 경로로 변환
-const result = await convert('./document.pdf');
-console.log(result.markdown);
-
-// 옵션과 함께 변환
-const result = await convert('./presentation.pptx', {
-  imageDir: 'extracted-images',
+const result = await convert('./보고서.docx', {
+  imageDir: './report-images',
   preserveLayout: true,
+  extractImages: true,
   extractCharts: true,
-  extractImages: true
 });
-
-console.log(`✅ 변환 완료!`);
-console.log(`📄 마크다운 길이: ${result.markdown.length}`);
-console.log(`🖼️ 추출된 이미지: ${result.images.length}`);
-console.log(`📊 찾은 차트: ${result.charts.length}`);
-console.log(`⏱️ 처리 시간: ${result.metadata.processingTime}ms`);
+console.log(result.markdown);
+console.log(result.images);
+console.log(result.metadata);
 ```
 
-### 한국어 문서 지원 (HWP/HWPX)
+CommonJS도 지원합니다.
 
-```typescript
-import { convert } from 'file2md';
-
-// 한국어 HWP 문서 변환
-const hwpResult = await convert('./document.hwp', {
-  imageDir: 'hwp-images',
-  preserveLayout: true,
-  extractImages: true
-});
-
-// 한국어 HWPX 문서 변환 (XML 기반 형식)
-const hwpxResult = await convert('./document.hwpx', {
-  imageDir: 'hwpx-images',
-  preserveLayout: true,
-  extractImages: true
-});
-
-console.log(`🇰🇷 HWP 내용: ${hwpResult.markdown.substring(0, 100)}...`);
-console.log(`📄 HWPX 페이지 수: ${hwpResult.metadata.pageCount}`);
-```
-
-### CommonJS
-
-```javascript
+```js
 const { convert } = require('file2md');
 
-const result = await convert('./document.docx');
-console.log(result.markdown);
-```
-
-### 버퍼에서 변환
-
-```typescript
-import { convert } from 'file2md';
-import { readFile } from 'fs/promises';
-
-const buffer = await readFile('./document.xlsx');
-const result = await convert(buffer, {
-  imageDir: 'spreadsheet-images'
-});
-```
-
-## 📋 API 참조
-
-### `convert(input, options?)`
-
-**매개변수:**
-- `input: string | Buffer` - 파일 경로 또는 문서 데이터가 포함된 버퍼
-- `options?: ConvertOptions` - 변환 옵션
-
-**반환값:** `Promise<ConversionResult>`
-
-### 옵션
-
-```typescript
-interface ConvertOptions {
-  imageDir?: string;        // 추출된 이미지를 위한 디렉터리 (기본값: 'images')
-  outputDir?: string;       // 슬라이드 스크린샷을 위한 출력 디렉터리 (PPTX, imageDir로 fallback)
-  preserveLayout?: boolean; // 문서 레이아웃 유지 (기본값: true)
-  extractCharts?: boolean;  // 차트를 표로 변환 (기본값: true)
-  extractImages?: boolean;  // 포함된 이미지 추출 (기본값: true)
-  maxPages?: number;        // PDF의 최대 페이지 수 (기본값: 무제한)
+async function main() {
+  const result = await convert('./보고서.pdf', { maxPages: 10 });
+  console.log(result.markdown);
 }
+main().catch(console.error);
 ```
 
-### 결과
+입력은 로컬 파일 경로 또는 Node.js `Buffer`입니다. 확장자가 아닌 파일 내용을
+확인합니다. URL을 다운로드하거나 Markdown 파일을 자동으로 저장하지 않습니다.
+필요하면 반환된 `result.markdown`을 직접 저장하세요.
 
-```typescript
-interface ConversionResult {
-  markdown: string;           // 생성된 마크다운 내용
-  images: ImageData[];        // 추출된 이미지 정보
-  charts: ChartData[];        // 추출된 차트 데이터
-  metadata: DocumentMetadata; // 처리 정보가 포함된 문서 메타데이터
-}
-```
+## 옵션
 
-## 🎯 형식별 특화 기능
+| 옵션 | 기본값 | 동작 |
+| --- | --- | --- |
+| `imageDir` | `images` | 이미지 저장 위치. 작업 디렉터리 기준 상대 경로와 절대 경로를 지원합니다. |
+| `outputDir` | `imageDir` | 모든 형식의 이미지 저장 위치를 덮어씁니다. 슬라이드 스크린샷을 생성하지 않습니다. |
+| `preserveLayout` | `true` | 지원하는 텍스트 스타일 및 PDF 레이아웃 추정을 적용합니다. false여도 표 구조는 유지합니다. |
+| `extractImages` | `true` | DOCX, PPTX, HWP, HWPX의 이미지를 저장합니다. |
+| `extractCharts` | `true` | Office 파일의 캐시된 차트 데이터를 추출합니다. |
+| `maxPages` | 전체 | PDF에서 실제로 읽는 페이지 수와 반환하는 페이지 수를 제한합니다. |
+| `maxFileSize` | 100 MiB | 입력 파일 크기 제한. 읽기 전과 읽는 중에 검사합니다. |
+| `maxMemoryUsage` | 500 MiB | 프로세스 힙 메모리 한도. 외부 메모리는 절반, RSS는 1.5배로 제한합니다. |
+| `timeout` | 60,000 ms | 처리 시간 제한. 동기/네이티브 작업의 제한은 아래를 참고하세요. |
+| `maxExtractedFiles` | 1,000 | 디렉터리를 포함한 ZIP 항목 수 제한. |
+| `maxExtractedSize` | 500 MiB | 압축 해제 후 전체 크기 제한. |
+| `maxIndividualFileSize` | ZIP 50 MiB / XML 10 MiB | 지정하면 두 한도를 함께 변경합니다. |
+| `enablePathValidation` | `true` | ZIP 원본 경로의 상위 디렉터리 접근, 절대 경로, 예약 이름을 검사합니다. |
+| `enableXXEProtection` | `true` | 호환성 옵션. false여도 DTD와 외부 엔터티는 허용하지 않습니다. |
 
-### 📄 PDF
-- ✅ **텍스트 추출** 및 레이아웃 향상
-- ✅ **표 감지** 및 서식 지정
-- ✅ **목록 인식** (글머리 기호, 번호)
-- ✅ **제목 감지** (대문자, 콜론)
-- ❌ **이미지 추출** (텍스트 전용 처리)
+숫자 옵션은 양의 안전한 정수여야 합니다. PDF, HWP, 네이티브 이미지 처리 모듈은
+필요한 경우에만 불러옵니다.
 
-### 📝 DOCX
-- ✅ **제목 계층** (H1-H6)
-- ✅ **텍스트 서식** (굵게, 기울임꼴)
-- ✅ **복잡한 표** 및 병합된 셀
-- ✅ **중첩된 목록** 및 적절한 들여쓰기
-- ✅ **포함된 이미지** 및 차트
-- ✅ **셀 스타일링** (정렬, 색상)
-- ✅ **글꼴 크기 보존** 및 서식
+## 결과 및 형식별 지원
 
-### 📊 XLSX
-- ✅ **여러 워크시트**를 별도 섹션으로
-- ✅ **셀 서식** (굵게, 색상, 정렬)
-- ✅ **데이터 타입 보존**
-- ✅ **차트 추출**을 데이터 표로
-- ✅ **조건부 서식** 노트
-- ✅ **공유 문자열** 처리 (대용량 파일)
+결과는 `markdown`, `images`, `charts`, `metadata`를 포함합니다.
+이미지에는 원본 경로(`originalPath`)와 저장 경로(`savedPath`)가 있으며,
+차트에는 종류, 제목, 범주, 숫자 계열이 있습니다.
 
-### 🎬 PPTX
-- ✅ **슬라이드별** 구성
-- ✅ **텍스트 위치** 및 레이아웃
-- ✅ **슬라이드별 이미지** 배치
-- ✅ **슬라이드에서 표** 추출
-- ✅ **다중 컬럼 레이아웃**
-- ✅ **문서 속성에서 제목** 추출
-- ✅ **차트 및 이미지** 인라인 삽입
+`metadata`에는 파일 형식, MIME, 페이지/시트/슬라이드 수, 이미지/차트 수,
+처리 시간(ms), 형식별 추가 정보가 있습니다. DOCX와 HWP/HWPX는 페이지를
+계산하지 않으므로 `pageCount`가 1입니다. HWP/HWPX의 구역 수는
+`metadata.additional.sectionCount`에 있습니다.
 
-### 🇰🇷 HWP (한글)
-- ✅ **이진 형식** hwp.js를 사용한 파싱
-- ✅ **한국어 텍스트 추출** 및 적절한 인코딩
-- ✅ **포함된 내용에서 이미지** 추출
-- ✅ **한국어 문서를 위한 레이아웃** 보존
-- ✅ **저작권 메시지 필터링**으로 깔끔한 출력
+| 형식 | 동작 및 한계 |
+| --- | --- |
+| PDF | `unpdf`의 PDF.js로 텍스트를 추출하고 제목/목록/표를 추정합니다. OCR과 이미지 추출은 지원하지 않습니다. |
+| DOCX | 문단/표 순서, 기본 서식, 제목, 목록, 링크, 이미지, 캐시된 차트. 모든 상속 스타일이나 페이지 배치를 재현하지 않습니다. |
+| XLSX | 관계 파일 기준 시트 순서, 공유/인라인 문자열, 불리언, 캐시된 수식 결과, 일반적인 날짜/백분율, 셀 스타일, 차트. 수식을 계산하지 않으며 빈 행 간격은 압축합니다. |
+| PPTX | 실제 슬라이드 순서, 그룹 텍스트, 표, 이미지, 차트. 스크린샷이나 픽셀 단위 배치를 재현하지 않습니다. |
+| HWP | 브라우저 없이 `hwp.js` 데이터 파서로 지원되는 HWP 5 문서를 읽습니다. 텍스트와 이미지를 추출하며 이진 표는 텍스트로 펼칩니다. 암호화된 형식 등은 실패할 수 있습니다. |
+| HWPX | XML 구역 순서, 문단, 표, 매니페스트/관계 기반 이미지 참조. 짧은 텍스트와 숫자도 보존합니다. |
 
-### 🇰🇷 HWPX (한글 XML)
-- ✅ **XML 기반 형식** JSZip을 사용한 파싱
-- ✅ **대용량 문서를 위한 다중 섹션** 지원
-- ✅ **이미지 참조를 위한 관계 매핑**
-- ✅ **OWPML 구조** 파싱
-- ✅ **향상된 한국어 텍스트** 처리
-- ✅ **ZIP 아카이브에서 BinData 이미지** 추출
+Markdown의 제약 때문에 병합 셀, 좌표, 글꼴, 도형은 원본과 같지 않을 수 있습니다.
+표의 병합 영역은 빈 격자 셀로 근사합니다. 스캔한 PDF는 먼저 OCR이 필요합니다.
 
-## 🖼️ 이미지 처리
+## 이미지
 
-이미지는 지정된 디렉터리에 자동으로 추출되고 저장됩니다:
+이미지를 실제로 저장할 때만 디렉터리를 만듭니다. 파일명에는 내용 해시가
+포함되어 여러 문서 또는 동시 변환 사이의 충돌을 방지하며, 기존 파일을
+조용히 덮어쓰지 않습니다.
 
-```typescript
-const result = await convert('./presentation.pptx', {
-  imageDir: 'my-images'
-});
+TIFF와 AVIF는 Sharp로 PNG로 변환합니다. PNG, JPEG, GIF, SVG, WebP 등은
+원본 바이트를 유지합니다. BMP, WMF, EMF는 원래 확장자를 유지하므로 브라우저
+표시에는 별도 변환이 필요할 수 있습니다. 변환하지 않은 이미지를 PNG로
+잘못 표시하지 않습니다.
 
-// 결과 구조:
-// my-images/
-// ├── image_1.png
-// ├── image_2.jpg
-// └── chart_1.png
+Markdown의 이미지 참조는 설정한 저장 디렉터리를 사용합니다. Markdown 파일을
+다른 위치에 저장한다면 최종 위치에 맞는 경로를 선택하세요. SVG는 원본 그대로
+추출하며 인라인 HTML용으로 정화하지 않습니다. 렌더링하거나 공개할 때는 문서와
+이미지를 신뢰할 수 없는 입력으로 취급하세요.
 
-// 마크다운에는 다음이 포함됩니다:
-// ![슬라이드 1 이미지](my-images/image_1.png)
-```
+## 오류와 자원 제한
 
-**참고:** PDF 파일은 텍스트 전용으로 처리됩니다. 필요시 전용 PDF 도구를 사용하여 이미지를 추출하세요.
-
-## 📊 차트 변환
-
-차트는 마크다운 표로 변환됩니다:
-
-```markdown
-#### 차트 1: 판매 데이터
-
-| 카테고리 | 1분기 | 2분기 | 3분기 | 4분기 |
-| --- | --- | --- | --- | --- |
-| 매출 | 100 | 150 | 200 | 250 |
-| 이익 | 20 | 30 | 45 | 60 |
-```
-
-## 🛡️ 오류 처리
-
-```typescript
-import { 
-  convert, 
-  UnsupportedFormatError, 
-  FileNotFoundError,
-  ParseError 
-} from 'file2md';
+```ts
+import { convert, ConversionError, SecurityError } from 'file2md';
 
 try {
-  const result = await convert('./document.pdf');
+  await convert('./보고서.docx');
 } catch (error) {
-  if (error instanceof UnsupportedFormatError) {
-    console.error('지원하지 않는 파일 형식');
-  } else if (error instanceof FileNotFoundError) {
-    console.error('파일을 찾을 수 없음');
-  } else if (error instanceof ParseError) {
-    console.error('문서 파싱 실패:', error.message);
-  }
+  if (error instanceof SecurityError) console.error(error.securityCode);
+  else if (error instanceof ConversionError) console.error(error.code, error.message);
+  else throw error;
 }
 ```
 
-## 🧪 고급 사용법
+`ParseError`, `InvalidFileError`, `UnsupportedFormatError`, `FileNotFoundError`,
+`ResourceLimitError`를 포함한 오류 클래스를 런타임에 내보냅니다. 내부 오류는
+`originalError`에 남으므로 외부 응답에 그대로 노출하지 마세요.
 
-### 일괄 처리
+ZIP은 추출 전에 검사하고 스트리밍 중에도 크기를 제한합니다. 기본 압축률 한도는
+100:1입니다. XML은 정상적인 네임스페이스와 이스케이프 문자를 허용하고, DTD와
+외부 엔터티를 차단하며, 중첩을 128단계로 제한합니다. 문서의 관계 URL을
+네트워크에서 가져오지 않습니다.
 
-```typescript
-import { convert } from 'file2md';
-import { readdir } from 'fs/promises';
+메모리 검사는 개별 변환이 아닌 전체 Node.js 프로세스를 관찰합니다. 시간 제한은
+비동기 작업과 파싱 중 검사에 적용되지만 이미 실행 중인 동기 파서/네이티브
+작업을 즉시 중단할 수는 없습니다. 악의적인 파일에 대한 강한 CPU/메모리 격리가
+필요하면 운영체제 한도가 있는 별도 프로세스나 워커에서 실행하세요. 실패하기 전에
+저장한 이미지는 남을 수 있으므로 문서별 디렉터리를 사용하는 것이 좋습니다.
 
-async function convertFolder(folderPath: string) {
-  const files = await readdir(folderPath);
-  const results = [];
-  
-  for (const file of files) {
-    if (file.match(/\.(pdf|docx|xlsx|pptx|hwp|hwpx)$/i)) {
-      try {
-        const result = await convert(`${folderPath}/${file}`, {
-          imageDir: 'batch-images',
-          extractImages: true
-        });
-        results.push({ file, success: true, result });
-      } catch (error) {
-        results.push({ file, success: false, error });
-      }
-    }
-  }
-  
-  return results;
-}
-```
+## 이전 구현과 달라진 점
 
-### 대용량 문서 처리
+- 보안 패치된 Sharp를 사용하며 최소 Node 버전이 20.9로 변경되었습니다.
+- ESM/CommonJS 진입점이 하나의 구현과 TypeScript 선언을 공유합니다.
+- `pdf-parse` 대신 `unpdf`를 사용하며 PDF 페이지 제한을 실제로 적용합니다.
+- 중복 XML 파서를 순서 보존 SAX 파서 하나로 통합했습니다.
+- JSDOM, 브라우저 폴리필, 고정 렌더링 대기, 사용하지 않는 시각 파서를 제거했습니다.
+- 정상 Office 문서를 거부하던 ZIP/XML 검사를 수정했습니다.
+- 사용자 지정 이미지 경로를 반영하고 파일명 충돌을 방지합니다.
+- `preserveLayout: false`가 지원되는 스타일 처리를 끕니다.
 
-```typescript
-import { convert } from 'file2md';
+Node 지원 범위, Markdown 서식, 생성 이미지 파일명이 바뀌므로 업그레이드 전에
+이전 출력에 의존하는 부분을 확인하세요.
 
-// 대용량 문서 최적화
-const result = await convert('./large-document.pdf', {
-  maxPages: 50,              // PDF 처리 제한
-  preserveLayout: true       // 레이아웃 분석 유지
-});
+## 개발 및 배포
 
-// 향상된 PPTX 처리
-const pptxResult = await convert('./presentation.pptx', {
-  outputDir: 'slides',       // 슬라이드를 위한 별도 디렉터리
-  extractCharts: true,       // 차트 데이터 추출
-  extractImages: true        // 포함된 이미지 추출
-});
-
-// 성능 메트릭은 메타데이터에서 확인 가능
-console.log('성능 메트릭:');
-console.log(`- 처리 시간: ${result.metadata.processingTime}ms`);
-console.log(`- 처리된 페이지: ${result.metadata.pageCount}`);
-console.log(`- 추출된 이미지: ${result.metadata.imageCount}`);
-console.log(`- 파일 타입: ${result.metadata.fileType}`);
-```
-
-## 📊 지원되는 형식
-
-| 형식 | 확장자 | 레이아웃 | 이미지 | 차트 | 표 | 목록 |
-|------|--------|----------|---------|------|-----|------|
-| PDF  | `.pdf` | ✅      | ❌     | ❌   | ✅  | ✅   |
-| Word | `.docx`| ✅      | ✅     | ✅   | ✅  | ✅   |
-| Excel| `.xlsx`| ✅      | ❌     | ✅   | ✅  | ❌   |
-| PowerPoint| `.pptx`| ✅   | ✅     | ✅   | ✅  | ❌   |
-| HWP  | `.hwp` | ✅      | ✅     | ❌   | ❌  | ✅   |
-| HWPX | `.hwpx`| ✅      | ✅     | ❌   | ❌  | ✅   |
-
-> **참고**: PDF 처리는 향상된 레이아웃 감지를 통한 텍스트 추출에 중점을 둡니다. PDF 이미지 추출이 필요한 경우 전용 PDF 처리 도구 사용을 고려하세요.
-
-## 🌏 한국어 문서 지원
-
-file2md는 한국어 문서 형식에 대한 포괄적인 지원을 포함합니다:
-
-### HWP (한글)
-- 한글 (Hangul) 워드 프로세서에서 사용하는 **이진 형식**
-- 한국 조직에서 여전히 널리 사용되는 **레거시 형식**
-- 한국어 문자 인코딩을 통한 **완전한 텍스트 추출**
-- **이미지 및 차트** 추출 지원
-
-### HWPX (한글 XML)
-- HWP의 후속 버전인 **현대적인 XML 기반** 형식
-- XML 콘텐츠 파일을 포함한 **ZIP 아카이브 구조**
-- 관계 매핑을 통한 **향상된 파싱**
-- **다중 섹션** 및 복잡한 문서 지원
-
-### 사용 예제
-
-```typescript
-// 한국어 문서 변환
-const koreanDocs = [
-  'report.hwp',      // 레거시 이진 형식
-  'document.hwpx',   // 현대적인 XML 형식
-  'presentation.pptx'
-];
-
-for (const doc of koreanDocs) {
-  const result = await convert(doc, {
-    imageDir: 'korean-docs-images',
-    preserveLayout: true
-  });
-  
-  console.log(`📄 ${doc}: ${result.markdown.length} 문자`);
-  console.log(`🖼️ 이미지: ${result.images.length}`);
-  console.log(`⏱️ 처리 시간: ${result.metadata.processingTime}ms`);
-}
-```
-
-## 🔧 성능 및 구성
-
-라이브러리는 합리적인 기본값으로 성능에 최적화되어 있습니다:
-
-- **무설정** - 별도 설정 없이 바로 사용
-- **효율적인 처리** - 다양한 문서 크기에 최적화
-- **메모리 관리** - 임시 리소스의 적절한 정리
-- **타입 안전성** - 완전한 TypeScript 지원
-
-성능 메트릭은 모니터링 및 최적화를 위해 변환 결과에 포함됩니다.
-
-## 🤝 기여하기
-
-기여를 환영합니다! 언제든지 Pull Request를 제출해주세요.
-
-1. 저장소 포크
-2. 기능 브랜치 생성 (`git checkout -b feature/amazing-feature`)
-3. 변경사항 커밋 (`git commit -m 'Add amazing feature'`)
-4. 브랜치에 푸시 (`git push origin feature/amazing-feature`)
-5. Pull Request 열기
-
-### 개발 환경 설정
-
-```bash
-# 저장소 클론
-git clone https://github.com/ricky-clevi/file2md.git
-cd file2md
-
-# 의존성 설치
-npm install
-
-# 테스트 실행
-npm test
-
-# 프로젝트 빌드
-npm run build
-
-# 린팅 실행
+```sh
+npm ci
+npm run typecheck
 npm run lint
+npm test
+npm run build
 ```
 
-## 📄 라이선스
+`dist/`에는 ESM 진입점, `dist/cjs/`에는 공유 CommonJS 구현이 생성됩니다. 소스, 테스트 자료,
+소스맵은 배포하지 않습니다.
 
-이 프로젝트는 MIT 라이선스 하에 라이선스됩니다 - 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+`npm run release:dry`는 버전을 바꾸지 않고 검사 및 배포 미리보기를 수행합니다.
+`npm run release`는 검사와 인증 확인 후 두 매니페스트의 패치 버전을 올리고
+배포합니다. `release:retry`는 버전 변경을 건너뜁니다. 호환성이 바뀌는 변경은
+배포 전에 적절한 major/minor 버전을 직접 선택해야 합니다.
 
-## 🔗 링크
+`main` 워크플로는 검사 후 npm에 배포하고 버전과 태그를 기록합니다. PR과 다른
+브랜치는 배포 없이 CI만 수행합니다. 로컬 설치나 빌드가 배포를 실행하지 않습니다.
 
-- [npm 패키지](https://www.npmjs.com/package/file2md)
-- [GitHub 저장소](https://github.com/ricky-clevi/file2md)
-- [이슈 및 버그 신고](https://github.com/ricky-clevi/file2md/issues)
-
----
-
-**❤️와 TypeScript로 제작** • **🖼️ 지능적 문서 파싱으로 향상** • **🇰🇷 한국어 문서 지원**
+MIT 라이선스.

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ResourceLimitError, SecurityError } from '../types/errors.js';
 import type { ConvertOptions } from '../types/interfaces.js';
 
@@ -19,20 +20,20 @@ export interface ResourceConfig {
  * Default resource configuration - conservative for backwards compatibility
  */
 export const DEFAULT_RESOURCE_CONFIG: ResourceConfig = {
-  maxFileSize: 100 * 1024 * 1024,    // 100MB
+  maxFileSize: 100 * 1024 * 1024, // 100MB
   maxMemoryUsage: 500 * 1024 * 1024, // 500MB
-  timeout: 60000,                     // 60 seconds
-  memoryCheckInterval: 1000           // Check every 1 second
+  timeout: 60000, // 60 seconds
+  memoryCheckInterval: 1000 // Check every 1 second
 };
 
 /**
  * Strict resource configuration for high-security environments
  */
 export const STRICT_RESOURCE_CONFIG: ResourceConfig = {
-  maxFileSize: 10 * 1024 * 1024,     // 10MB
+  maxFileSize: 10 * 1024 * 1024, // 10MB
   maxMemoryUsage: 100 * 1024 * 1024, // 100MB
-  timeout: 30000,                     // 30 seconds
-  memoryCheckInterval: 500            // Check every 500ms
+  timeout: 30000, // 30 seconds
+  memoryCheckInterval: 500 // Check every 500ms
 };
 
 /**
@@ -41,7 +42,8 @@ export const STRICT_RESOURCE_CONFIG: ResourceConfig = {
 export function createResourceConfig(options: ConvertOptions): ResourceConfig {
   return {
     maxFileSize: options.maxFileSize ?? DEFAULT_RESOURCE_CONFIG.maxFileSize,
-    maxMemoryUsage: options.maxMemoryUsage ?? DEFAULT_RESOURCE_CONFIG.maxMemoryUsage,
+    maxMemoryUsage:
+      options.maxMemoryUsage ?? DEFAULT_RESOURCE_CONFIG.maxMemoryUsage,
     timeout: options.timeout ?? DEFAULT_RESOURCE_CONFIG.timeout,
     memoryCheckInterval: DEFAULT_RESOURCE_CONFIG.memoryCheckInterval
   };
@@ -56,8 +58,16 @@ export class ResourceMonitor {
   private readonly initialMemory: NodeJS.MemoryUsage;
   private memoryCheckTimer?: NodeJS.Timeout;
   private isMonitoring = false;
+  private failure?: Error;
 
   constructor(config: ResourceConfig) {
+    for (const [name, value] of Object.entries(config)) {
+      if (!Number.isSafeInteger(value) || value <= 0)
+        throw new SecurityError(
+          `Invalid resource limit: ${name}`,
+          'INVALID_LIMIT'
+        );
+    }
     this.config = config;
     this.startTime = Date.now();
     this.initialMemory = process.memoryUsage();
@@ -81,7 +91,7 @@ export class ResourceMonitor {
    */
   checkMemoryUsage(): void {
     const currentMemory = process.memoryUsage();
-    
+
     // Check heap usage
     if (currentMemory.heapUsed > this.config.maxMemoryUsage) {
       throw new ResourceLimitError(
@@ -127,20 +137,26 @@ export class ResourceMonitor {
   /**
    * Start continuous monitoring
    */
-  startMonitoring(): void {
+  startMonitoring(onLimit?: (error: Error) => void): void {
     if (this.isMonitoring) return;
-    
+
     this.isMonitoring = true;
-    this.memoryCheckTimer = setInterval(() => {
-      try {
-        this.checkMemoryUsage();
-        this.checkTimeout();
-      } catch (error) {
-        // Stop monitoring on error and let it propagate
-        this.stopMonitoring();
-        throw error;
-      }
-    }, this.config.memoryCheckInterval);
+    this.memoryCheckTimer = setInterval(
+      () => {
+        try {
+          this.checkMemoryUsage();
+          this.checkTimeout();
+        } catch (error) {
+          // Stop monitoring on error and let it propagate
+          this.stopMonitoring();
+          this.failure =
+            error instanceof Error ? error : new Error(String(error));
+          onLimit?.(this.failure);
+        }
+      },
+      Math.min(this.config.memoryCheckInterval, this.config.timeout + 1)
+    );
+    if (!onLimit) this.memoryCheckTimer.unref();
   }
 
   /**
@@ -158,6 +174,7 @@ export class ResourceMonitor {
    * Perform a comprehensive resource check
    */
   performCheck(): void {
+    if (this.failure) throw this.failure;
     this.checkMemoryUsage();
     this.checkTimeout();
   }
@@ -177,7 +194,7 @@ export class ResourceMonitor {
   } {
     const currentMemory = process.memoryUsage();
     const elapsedTime = Date.now() - this.startTime;
-    
+
     return {
       elapsedTime,
       memoryUsage: currentMemory,
@@ -201,7 +218,9 @@ export class ResourceMonitor {
 /**
  * Create and configure a resource monitor
  */
-export function createResourceMonitor(options: ConvertOptions): ResourceMonitor {
+export function createResourceMonitor(
+  options: ConvertOptions
+): ResourceMonitor {
   const config = createResourceConfig(options);
   return new ResourceMonitor(config);
 }
@@ -214,16 +233,23 @@ export async function withResourceMonitoring<T>(
   operation: (monitor: ResourceMonitor) => Promise<T>
 ): Promise<T> {
   const monitor = createResourceMonitor(options);
-  
+
   try {
-    monitor.startMonitoring();
-    const result = await operation(monitor);
+    monitor.performCheck();
+    const failure = new Promise<never>((_resolve, reject) =>
+      monitor.startMonitoring(reject)
+    );
+    const result = await Promise.race([
+      activeMonitor.run(monitor, () => operation(monitor)),
+      failure
+    ]);
+    monitor.performCheck();
     return result;
   } catch (error) {
     if (error instanceof ResourceLimitError) {
       throw error;
     }
-    
+
     // Check if we hit resource limits during error
     try {
       monitor.performCheck();
@@ -232,7 +258,7 @@ export async function withResourceMonitoring<T>(
         throw resourceError;
       }
     }
-    
+
     throw error;
   } finally {
     monitor.dispose();
@@ -243,12 +269,12 @@ export async function withResourceMonitoring<T>(
  * Validate buffer size and content safely
  */
 export function validateBuffer(
-  buffer: Buffer, 
+  buffer: Buffer,
   options: ConvertOptions,
   contentType?: string
 ): void {
   const config = createResourceConfig(options);
-  
+
   // Check file size
   if (buffer.length > config.maxFileSize) {
     throw new ResourceLimitError(
@@ -257,16 +283,12 @@ export function validateBuffer(
       buffer.length
     );
   }
-  
+
   // Basic content validation
   if (buffer.length === 0) {
-    throw new SecurityError(
-      'Empty file detected',
-      'EMPTY_FILE',
-      'medium'
-    );
+    throw new SecurityError('Empty file detected', 'EMPTY_FILE', 'medium');
   }
-  
+
   // Check for null bytes (potential binary confusion)
   if (contentType === 'text' || contentType === 'xml') {
     const nullByteIndex = buffer.indexOf(0);
@@ -274,28 +296,6 @@ export function validateBuffer(
       throw new SecurityError(
         `Null byte detected at position ${nullByteIndex} in text content`,
         'NULL_BYTE_DETECTED',
-        'medium'
-      );
-    }
-  }
-  
-  // Check for suspiciously repetitive content (potential bomb)
-  if (buffer.length > 1024) {
-    const sample = buffer.subarray(0, 1024);
-    const firstByte = sample[0];
-    let repetitiveBytes = 0;
-    
-    for (let i = 1; i < sample.length; i++) {
-      if (sample[i] === firstByte) {
-        repetitiveBytes++;
-      }
-    }
-    
-    // If more than 90% of the sample is the same byte, it's suspicious
-    if (repetitiveBytes > sample.length * 0.9) {
-      throw new SecurityError(
-        `Suspiciously repetitive content detected (${((repetitiveBytes / sample.length) * 100).toFixed(1)}% identical bytes)`,
-        'REPETITIVE_CONTENT',
         'medium'
       );
     }
@@ -309,24 +309,10 @@ export async function processWithMemoryLimit<T>(
   options: ConvertOptions,
   operation: () => Promise<T> | T
 ): Promise<T> {
-  const config = createResourceConfig(options);
-  const monitor = new ResourceMonitor(config);
-  
-  try {
-    // Check initial state
-    monitor.checkMemoryUsage();
-    
-    // Start monitoring
-    monitor.startMonitoring();
-    
-    // Execute operation
-    const result = await operation();
-    
-    // Final check
-    monitor.performCheck();
-    
-    return result;
-  } finally {
-    monitor.dispose();
-  }
+  return withResourceMonitoring(options, async () => operation());
+}
+
+const activeMonitor = new AsyncLocalStorage<ResourceMonitor>();
+export function checkResources(): void {
+  activeMonitor.getStore()?.performCheck();
 }

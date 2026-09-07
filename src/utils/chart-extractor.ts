@@ -1,10 +1,25 @@
+import { ResourceLimitError } from '../types/errors.js';
+import { checkResources } from './resource-monitor.js';
 import type JSZip from 'jszip';
-
-import type { ChartData, ChartSeries, ChartType, ConvertOptions } from '../types/interfaces.js';
-import { ChartExtractionError, SecurityError } from '../types/errors.js';
-import { SecureZipExtractor, createZipSecurityConfig } from './zip-security.js';
-import { createSecureXmlParser } from './secure-xml-parser.js';
+import type {
+  ChartData,
+  ChartSeries,
+  ChartType,
+  ConvertOptions
+} from '../types/interfaces.js';
 import type { ImageExtractor } from './image-extractor.js';
+import { SecureZipExtractor, createZipSecurityConfig } from './zip-security.js';
+import { parseXmlTree } from './secure-xml-parser.js';
+import {
+  child,
+  children,
+  descendants,
+  attr,
+  text,
+  type XmlNode,
+  localName
+} from './xml.js';
+import { escapeMarkdown } from './markdown.js';
 
 interface ExtractedChart {
   readonly originalPath: string;
@@ -12,466 +27,135 @@ interface ExtractedChart {
   readonly basePath: string;
 }
 
-interface ChartFileInfo {
-  readonly path: string;
-  readonly file: JSZip.JSZipObject;
-  readonly basePath: string;
+function cachedValues(node: XmlNode | undefined): string[] {
+  checkResources();
+  const cache =
+    descendants(node, 'strCache')[0] ??
+    descendants(node, 'numCache')[0] ??
+    child(node, 'strLit') ??
+    child(node, 'numLit');
+  const values: string[] = [];
+  for (const pt of children(cache, 'pt')) {
+    const index = Number(attr(pt, 'idx') ?? values.length);
+    if (!Number.isSafeInteger(index) || index < 0 || index > 100000)
+      throw new Error('Invalid chart point index');
+    values[index] = text(child(pt, 'v'));
+  }
+  return Array.from({ length: values.length }, (_, i) => values[i] ?? '');
 }
-
-// XML parser result types
-interface ChartXmlResult {
-  readonly 'c:chartSpace'?: readonly [{
-    readonly 'c:chart': readonly [{
-      readonly 'c:title'?: readonly [{
-        readonly 'c:tx': readonly [unknown];
-      }];
-      readonly 'c:plotArea'?: readonly [{
-        readonly 'c:barChart'?: readonly [unknown];
-        readonly 'c:lineChart'?: readonly [unknown];
-        readonly 'c:pieChart'?: readonly [unknown];
-        readonly 'c:scatterChart'?: readonly [unknown];
-      }];
-    }];
-  }];
-}
-
-interface ChartSeriesData {
-  readonly 'c:ser'?: readonly {
-    readonly 'c:tx'?: readonly [{
-      readonly 'c:strRef': readonly [{
-        readonly 'c:strCache'?: readonly [{
-          readonly 'c:pt': readonly {
-            readonly 'c:v': readonly [string];
-          }[];
-        }];
-      }];
-    }];
-    readonly 'c:val'?: readonly [{
-      readonly 'c:numRef': readonly [{
-        readonly 'c:numCache'?: readonly [{
-          readonly 'c:pt': readonly {
-            readonly 'c:v': readonly [string];
-          }[];
-        }];
-      }];
-    }];
-    readonly 'c:cat'?: readonly [{
-      readonly 'c:strRef': readonly [{
-        readonly 'c:strCache'?: readonly [{
-          readonly 'c:pt': readonly {
-            readonly 'c:v': readonly [string];
-          }[];
-        }];
-      }];
-    }];
-  }[];
-}
-
 export class ChartExtractor {
-  private readonly imageExtractor: ImageExtractor;
-  private chartCounter: number = 0;
-
-  constructor(imageExtractor: ImageExtractor) {
-    this.imageExtractor = imageExtractor;
+  private chartCounter = 0;
+  constructor(_imageExtractor: ImageExtractor) {
+    /* Kept for public API compatibility. */
   }
-
-  /**
-   * Extract charts from a ZIP archive (DOCX, XLSX, PPTX)
-   */
   async extractChartsFromZip(
-    zip: JSZip, 
-    basePath: string = '', 
-    options?: ConvertOptions
+    zip: JSZip,
+    basePath = '',
+    options: ConvertOptions = {},
+    extractor?: SecureZipExtractor
   ): Promise<readonly ExtractedChart[]> {
-    // Create secure ZIP extractor
-    const securityConfig = createZipSecurityConfig(options || {});
-    const secureExtractor = new SecureZipExtractor(securityConfig);
-    
-    // Validate ZIP archive first
-    try {
-      await secureExtractor.validate(zip);
-    } catch (error) {
-      if (error instanceof SecurityError) {
-        console.warn(`ZIP security validation failed for chart extraction: ${error.message}`);
-        throw new ChartExtractionError(
-          `Archive failed security validation: ${error.message}`,
-          error
-        );
-      }
-      throw error;
-    }
-    
-    const charts: ChartFileInfo[] = [];
-    
-    zip.forEach((relativePath, file) => {
-      // Skip if path is not safe
-      if (!secureExtractor.isPathSafe(relativePath)) {
-        console.warn(`Skipping unsafe chart path: ${relativePath}`);
-        return;
-      }
-      
-      // Look for chart files
-      if (relativePath.includes('/charts/') && relativePath.endsWith('.xml')) {
-        charts.push({
-          path: relativePath,
-          file,
-          basePath
-        });
-      }
-    });
-
-    const extractedCharts: ExtractedChart[] = [];
-    for (const chart of charts) {
-      try {
-        // Use secure file extraction
-        const xmlBuffer = await secureExtractor.extractFile(chart.file, chart.path);
-        const chartData = await this.parseChartFromBuffer(xmlBuffer, options);
-        if (chartData) {
-          extractedCharts.push({
-            originalPath: chart.path,
-            data: chartData,
-            basePath
+    const secure =
+      extractor ?? new SecureZipExtractor(createZipSecurityConfig(options));
+    if (!extractor) await secure.validate(zip);
+    const result: ExtractedChart[] = [];
+    let pointCount = 0;
+    for (const [filename, file] of Object.entries(zip.files)) {
+      if (
+        !filename.startsWith(basePath) ||
+        !/\/charts\/chart\d+\.xml$/.test(filename) ||
+        file.dir
+      )
+        continue;
+      const root = parseXmlTree(
+        (await secure.extractFile(file, filename)).toString('utf8'),
+        options
+      );
+      const chart = child(root, 'chart');
+      if (!chart) continue;
+      const plot = child(chart, 'plotArea');
+      const chartNode = children(plot).find((c) =>
+        /Chart$/.test(localName(c.name))
+      );
+      if (!chartNode) continue;
+      const typeName = localName(chartNode.name).replace(/Chart$/, '');
+      const type: ChartType = [
+        'bar',
+        'line',
+        'pie',
+        'scatter',
+        'area'
+      ].includes(typeName)
+        ? (typeName as ChartType)
+        : 'unknown';
+      const series: ChartSeries[] = children(chartNode, 'ser').map(
+        (seriesNode, index) => {
+          const tx = child(seriesNode, 'tx');
+          const name =
+            text(child(tx, 'v')) ||
+            cachedValues(tx)[0] ||
+            `Series ${index + 1}`;
+          const categories = cachedValues(
+            child(seriesNode, 'cat') ?? child(seriesNode, 'xVal')
+          );
+          const values = cachedValues(
+            child(seriesNode, 'val') ?? child(seriesNode, 'yVal')
+          ).map((value) => {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : 0;
           });
+          pointCount += categories.length + values.length;
+          if (pointCount > 1_000_000)
+            throw new ResourceLimitError('chart points', 1_000_000, pointCount);
+          return { name, categories, values };
         }
-      } catch (error: unknown) {
-        console.warn(`Failed to extract chart ${chart.path}:`, error instanceof Error ? error.message : 'Unknown error');
-      }
+      );
+      const titleNode = child(chart, 'title');
+      const title =
+        descendants(titleNode, 't')
+          .map((t) => text(t))
+          .join(' ') ||
+        cachedValues(titleNode)[0] ||
+        '';
+      result.push({
+        originalPath: filename,
+        basePath,
+        data: { type, title, series, categories: series[0]?.categories ?? [] }
+      });
     }
-
-    return extractedCharts;
+    return result;
   }
-
-  /**
-   * Parse a chart XML file (deprecated - kept for compatibility)
-   * @deprecated Use parseChartFromBuffer with secure extraction instead
-   */
-  private async parseChart(chartFile: JSZip.JSZipObject, options?: ConvertOptions): Promise<ChartData | null> {
-    try {
-      const xmlContent = await chartFile.async('string');
-
-      // Always use secure XML parsing to prevent XXE attacks
-      const secureXmlParser = createSecureXmlParser(options || {});
-      const result = await secureXmlParser(xmlContent) as ChartXmlResult;
-      
-      const chartData: Omit<ChartData, 'type' | 'title' | 'series' | 'categories'> & {
-        type: ChartType;
-        title: string;
-        series: ChartSeries[];
-        categories: string[];
-      } = {
-        type: 'unknown',
-        title: '',
-        series: [],
-        categories: []
-      };
-
-      // Extract chart type
-      if (result['c:chartSpace']) {
-        const chart = result['c:chartSpace'][0]['c:chart'][0];
-        
-        // Extract title
-        if (chart['c:title']?.[0]?.['c:tx']) {
-          chartData.title = this.extractTextFromTitle(chart['c:title'][0]['c:tx'][0]);
-        }
-
-        // Extract plot area
-        if (chart['c:plotArea']) {
-          const plotArea = chart['c:plotArea'][0];
-          
-          // Determine chart type and extract data
-          if (plotArea['c:barChart']) {
-            chartData.type = 'bar';
-            const { series, categories } = this.extractBarChartData(plotArea['c:barChart'][0] as ChartSeriesData);
-            chartData.series = series;
-            chartData.categories = categories;
-          } else if (plotArea['c:lineChart']) {
-            chartData.type = 'line';
-            const { series, categories } = this.extractLineChartData(plotArea['c:lineChart'][0] as ChartSeriesData);
-            chartData.series = series;
-            chartData.categories = categories;
-          } else if (plotArea['c:pieChart']) {
-            chartData.type = 'pie';
-            const { series, categories } = this.extractPieChartData(plotArea['c:pieChart'][0] as ChartSeriesData);
-            chartData.series = series;
-            chartData.categories = categories;
-          } else if (plotArea['c:scatterChart']) {
-            chartData.type = 'scatter';
-            const { series, categories } = this.extractScatterChartData(plotArea['c:scatterChart'][0] as ChartSeriesData);
-            chartData.series = series;
-            chartData.categories = categories;
-          }
-        }
-      }
-
-      return chartData;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new ChartExtractionError(`Failed to parse chart: ${message}`, error as Error);
-    }
-  }
-
-  private extractTextFromTitle(titleData: unknown): string {
-    // Simplified title extraction - in a real implementation, this would need more robust typing
-    try {
-      const title = titleData as { 'c:rich'?: readonly [{ 'a:p'?: readonly [{ 'a:r'?: readonly [{ 'a:t'?: readonly [string] }] }] }] };
-      if (title?.['c:rich']?.[0]?.['a:p']) {
-        const paragraphs = title['c:rich'][0]['a:p'];
-        let titleText = '';
-        for (const para of paragraphs) {
-          if (para?.['a:r']?.[0]?.['a:t']?.[0]) {
-            titleText += `${para['a:r'][0]['a:t'][0]} `;
-          }
-        }
-        return titleText.trim();
-      }
-    } catch {
-      // Ignore parsing errors for title
-    }
-    return '';
-  }
-
-  private extractBarChartData(barChart: ChartSeriesData): { series: ChartSeries[]; categories: string[] } {
-    return this.extractGenericChartData(barChart);
-  }
-
-  private extractLineChartData(lineChart: ChartSeriesData): { series: ChartSeries[]; categories: string[] } {
-    return this.extractGenericChartData(lineChart);
-  }
-
-  private extractPieChartData(pieChart: ChartSeriesData): { series: ChartSeries[]; categories: string[] } {
-    return this.extractGenericChartData(pieChart);
-  }
-
-  private extractScatterChartData(scatterChart: ChartSeriesData): { series: ChartSeries[]; categories: string[] } {
-    return this.extractGenericChartData(scatterChart);
-  }
-
-  private extractGenericChartData(chartData: ChartSeriesData): { series: ChartSeries[]; categories: string[] } {
-    const series: ChartSeries[] = [];
-    let allCategories: string[] = [];
-    
-    if (chartData['c:ser']) {
-      for (const seriesData of chartData['c:ser']) {
-        const seriesInfo: Omit<ChartSeries, 'name' | 'values' | 'categories'> & {
-          name: string;
-          values: number[];
-          categories?: string[];
-        } = {
-          name: '',
-          values: [],
-          categories: undefined
-        };
-        
-        // Extract series name
-        if (seriesData['c:tx']?.[0]?.['c:strRef']?.[0]?.['c:strCache']?.[0]?.['c:pt']?.[0]) {
-          seriesInfo.name = seriesData['c:tx'][0]['c:strRef'][0]['c:strCache'][0]['c:pt'][0]['c:v'][0];
-        }
-        
-        // Extract values
-        if (seriesData['c:val']?.[0]?.['c:numRef']?.[0]?.['c:numCache']?.[0]?.['c:pt']) {
-          for (const pt of seriesData['c:val'][0]['c:numRef'][0]['c:numCache'][0]['c:pt']) {
-            seriesInfo.values.push(parseFloat(pt['c:v'][0]) || 0);
-          }
-        }
-        
-        // Extract categories for this series
-        if (seriesData['c:cat']?.[0]?.['c:strRef']?.[0]?.['c:strCache']?.[0]?.['c:pt']) {
-          const categories: string[] = [];
-          for (const pt of seriesData['c:cat'][0]['c:strRef'][0]['c:strCache'][0]['c:pt']) {
-            categories.push(pt['c:v'][0]);
-          }
-          seriesInfo.categories = categories;
-          if (allCategories.length === 0) {
-            allCategories = categories;
-          }
-        }
-        
-        series.push(seriesInfo);
-      }
-    }
-    
-    return { series, categories: allCategories };
-  }
-
-  /**
-   * Format chart data as markdown
-   */
-  formatChartAsMarkdown(chartData: ChartData): string {
+  formatChartAsMarkdown(chart: ChartData): string {
     this.chartCounter++;
-    let markdown = `#### Chart ${this.chartCounter}: ${chartData.title || `${chartData.type.toUpperCase()} Chart`}\n\n`;
-    
-    if (chartData.series.length === 0) {
-      return `${markdown}*No chart data available*\n\n`;
+    const escapeCell = (value: string) =>
+      escapeMarkdown(value).replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+    let markdown = `#### Chart ${this.chartCounter}: ${escapeMarkdown(chart.title || `${chart.type.toUpperCase()} Chart`)}\n\n`;
+    if (!chart.series.length) return `${markdown}*No chart data available*\n\n`;
+    markdown += `| Category | ${chart.series.map((s) => escapeCell(s.name)).join(' | ')} |\n`;
+    markdown += `| --- | ${chart.series.map(() => '---').join(' | ')} |\n`;
+    const length = chart.series.reduce(
+      (max, series) => Math.max(max, series.values.length),
+      chart.categories.length
+    );
+    if (length * chart.series.length > 1_000_000)
+      throw new ResourceLimitError(
+        'rendered chart cells',
+        1_000_000,
+        length * chart.series.length
+      );
+    for (let i = 0; i < length; i++) {
+      if (i % 256 === 0) checkResources();
+      const label =
+        chart.categories[i] ||
+        chart.series[0]?.categories?.[i] ||
+        `Item ${i + 1}`;
+      markdown += `| ${escapeCell(label)} | ${chart.series.map((s) => s.values[i] ?? '').join(' | ')} |\n`;
     }
-
-    switch (chartData.type) {
-      case 'bar':
-      case 'line':
-        markdown += this.formatBarLineChart(chartData);
-        break;
-      case 'pie':
-        markdown += this.formatPieChart(chartData);
-        break;
-      default:
-        markdown += this.formatGenericChart(chartData);
-    }
-
     return `${markdown}\n`;
   }
-
-  private formatBarLineChart(chartData: ChartData): string {
-    let markdown = '| Category |';
-    
-    // Add series headers
-    for (const series of chartData.series) {
-      markdown += ` ${series.name || 'Series'} |`;
-    }
-    markdown += '\n';
-    
-    // Add separator
-    markdown += '| --- |';
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    for (const _ of chartData.series) {
-      markdown += ' --- |';
-    }
-    markdown += '\n';
-    
-    // Find maximum number of categories
-    const maxCategories = Math.max(
-      chartData.categories.length,
-      ...chartData.series.map(s => s.categories?.length || 0)
-    );
-    
-    // Add data rows
-    for (let i = 0; i < maxCategories; i++) {
-      const category = chartData.categories[i] || chartData.series[0]?.categories?.[i] || `Item ${i + 1}`;
-      markdown += `| ${category} |`;
-      
-      for (const series of chartData.series) {
-        const value = series.values[i] || 0;
-        markdown += ` ${value} |`;
-      }
-      markdown += '\n';
-    }
-    
-    return markdown;
-  }
-
-  private formatPieChart(chartData: ChartData): string {
-    const series = chartData.series[0];
-    if (!series) return '*No pie chart data*\n';
-    
-    let markdown = '| Category | Value | Percentage |\n';
-    markdown += '| --- | --- | --- |\n';
-    
-    const total = series.values.reduce((sum, val) => sum + val, 0);
-    const categories = series.categories || chartData.categories;
-    
-    for (let i = 0; i < Math.min(categories.length, series.values.length); i++) {
-      const category = categories[i];
-      const value = series.values[i] || 0;
-      const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
-      
-      markdown += `| ${category} | ${value} | ${percentage}% |\n`;
-    }
-    
-    return markdown;
-  }
-
-  private formatGenericChart(chartData: ChartData): string {
-    let markdown = `*${chartData.type.toUpperCase()} chart with ${chartData.series.length} series*\n\n`;
-    
-    for (const [i, series] of chartData.series.entries()) {
-      markdown += `**Series ${i + 1}: ${series.name}**\n`;
-      markdown += `Values: ${series.values.join(', ')}\n`;
-      if (series.categories && series.categories.length > 0) {
-        markdown += `Categories: ${series.categories.join(', ')}\n`;
-      }
-      markdown += '\n';
-    }
-    
-    return markdown;
-  }
-
-  /**
-   * Reset internal counters
-   */
   reset(): void {
     this.chartCounter = 0;
   }
-
-  /**
-   * Get current chart counter
-   */
   get currentChartCount(): number {
     return this.chartCounter;
-  }
-
-  /**
-   * Parse chart data from a buffer (secure version)
-   */
-  private async parseChartFromBuffer(buffer: Buffer, options?: ConvertOptions): Promise<ChartData | null> {
-    try {
-      const xmlContent = buffer.toString('utf8');
-
-      // Always use secure XML parsing to prevent XXE attacks
-      const secureXmlParser = createSecureXmlParser(options || {});
-      const result = await secureXmlParser(xmlContent) as ChartXmlResult;
-      
-      const chartSpace = result['c:chartSpace'];
-      if (!chartSpace || !chartSpace[0]) return null;
-
-      const chart = chartSpace[0]['c:chart'];
-      if (!chart || !chart[0]) return null;
-
-      const chartData: Omit<ChartData, 'type' | 'title' | 'series' | 'categories'> & {
-        type: ChartType;
-        title: string;
-        series: ChartSeries[];
-        categories: string[];
-      } = {
-        type: 'unknown',
-        title: 'Chart',
-        series: [],
-        categories: []
-      };
-
-      // Extract title
-      if (chart[0]['c:title']?.[0]?.['c:tx']) {
-        chartData.title = this.extractTextFromTitle(chart[0]['c:title'][0]['c:tx'][0]);
-      }
-
-      // Extract plot area and determine chart type
-      const plotArea = chart[0]['c:plotArea']?.[0];
-      if (plotArea) {
-        if (plotArea['c:barChart']) {
-          chartData.type = 'bar';
-          const { series, categories } = this.extractBarChartData(plotArea['c:barChart'][0] as ChartSeriesData);
-          chartData.series = series;
-          chartData.categories = categories;
-        } else if (plotArea['c:lineChart']) {
-          chartData.type = 'line';
-          const { series, categories } = this.extractLineChartData(plotArea['c:lineChart'][0] as ChartSeriesData);
-          chartData.series = series;
-          chartData.categories = categories;
-        } else if (plotArea['c:pieChart']) {
-          chartData.type = 'pie';
-          const { series, categories } = this.extractPieChartData(plotArea['c:pieChart'][0] as ChartSeriesData);
-          chartData.series = series;
-          chartData.categories = categories;
-        } else if (plotArea['c:scatterChart']) {
-          chartData.type = 'scatter';
-          const { series, categories } = this.extractScatterChartData(plotArea['c:scatterChart'][0] as ChartSeriesData);
-          chartData.series = series;
-          chartData.categories = categories;
-        }
-      }
-
-      return chartData;
-      
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new ChartExtractionError(`Failed to parse chart from buffer: ${message}`, error as Error);
-    }
   }
 }

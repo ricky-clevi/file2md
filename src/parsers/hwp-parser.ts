@@ -1,20 +1,32 @@
-import JSZip from 'jszip';
-import { XMLParser } from 'fast-xml-parser';
-import { JSDOM } from 'jsdom';
 import path from 'node:path';
-import { Buffer } from 'node:buffer';
-
-import { setupBrowserPolyfills } from '../utils/browser-polyfills.js';
+import { stat } from 'node:fs/promises';
 import type { ImageExtractor } from '../utils/image-extractor.js';
 import type { ChartExtractor } from '../utils/chart-extractor.js';
-import { ParseError, SecurityError } from '../types/errors.js';
-import type { 
-  ImageData, 
+import {
+  ConversionError,
+  InvalidFileError,
+  ParseError
+} from '../types/errors.js';
+import type {
+  ImageData,
   ChartData,
-  ConvertOptions
+  ConvertOptions,
+  CellData
 } from '../types/interfaces.js';
-import { SecureZipExtractor, createZipSecurityConfig } from '../utils/zip-security.js';
-import { createSecureXmlParser } from '../utils/secure-xml-parser.js';
+import { loadArchive, type Archive } from '../utils/zip-security.js';
+import {
+  readXml,
+  relationships,
+  child,
+  children,
+  text,
+  attr,
+  localName,
+  type XmlNode
+} from '../utils/xml.js';
+import { escapeMarkdown } from '../utils/markdown.js';
+import { LayoutParser } from '../utils/layout-parser.js';
+import { checkResources } from '../utils/resource-monitor.js';
 
 export interface HwpParseOptions {
   readonly preserveLayout?: boolean;
@@ -22,1319 +34,221 @@ export interface HwpParseOptions {
   readonly extractCharts?: boolean;
   readonly options?: ConvertOptions;
 }
-
 export interface HwpParseResult {
   readonly markdown: string;
   readonly images: readonly ImageData[];
   readonly charts: readonly ChartData[];
   readonly metadata: Record<string, unknown>;
 }
+const cfbSignature = Buffer.from([
+  0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1
+]);
 
-type HwpFormat = 'hwp' | 'hwpx' | 'unknown';
-
-type RelationshipMap = Record<string, string>;
-
-/**
- * Build a relationship map for HWPX content files (rId -> target zip path)
- * HWPX follows OPC; relationships are stored alongside content files:
- *   Contents/section0.xml  ->  Contents/_rels/section0.xml.rels
- */
-async function buildRelationshipMap(zip: JSZip, contentFileNames: readonly string[]): Promise<RelationshipMap> {
-  const relMap: RelationshipMap = {};
-  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', trimValues: true });
-
-  for (const contentFileName of contentFileNames) {
-    try {
-      const dir = path.posix.dirname(contentFileName);
-      const base = path.posix.basename(contentFileName);
-    const relsPath = path.posix.join(dir, '_rels', `${base}.rels`);
-      const relsFile = zip.file(relsPath);
-      if (!relsFile) continue;
-
-      const relsXml = await relsFile.async('string');
-      const rels = parser.parse(relsXml) as unknown as {
-        Relationships?: { Relationship?: unknown };
-      };
-
-      const relationships = (rels?.Relationships as { Relationship?: unknown })?.Relationship;
-      if (!relationships) continue;
-
-      const relArray = Array.isArray(relationships) ? relationships : [relationships];
-      for (const rel of relArray) {
-        const relObj = rel as Record<string, unknown>;
-        const id = (relObj['@_Id'] as string) || (relObj['@_ID'] as string);
-        const targetRaw = (relObj['@_Target'] as string) || (relObj['@_HRef'] as string);
-        if (!id || !targetRaw) continue;
-
-        // Normalize target to a POSIX zip path and try to resolve to an existing entry
-        const tryCandidates: string[] = [];
-        let target = targetRaw.replace(/\\/g, '/');
-        if (target.startsWith('/')) {
-          target = target.slice(1); // remove leading slash
-        }
-        // Candidate 1: resolve relative to the content file directory
-        tryCandidates.push(path.posix.normalize(path.posix.join(dir, target)));
-        // Candidate 2: as-is normalized (some rels already relative to root)
-        tryCandidates.push(path.posix.normalize(target));
-        // Candidate 3: strip common prefixes (e.g., Contents/)
-        if (target.includes('BinData/')) {
-          const tail = target.split('BinData/').pop();
-          tryCandidates.push(`BinData/${tail}`);
-        }
-
-        const resolvedExisting = tryCandidates.find(c => !!zip.file(c));
-        // Store with r:id as key (common in content)
-        relMap[id] = resolvedExisting || tryCandidates[0];
-        // Also store with potential 'r:id' prefix to increase hit rate in matching
-        relMap[`r:${id}`] = relMap[id];
-      }
-    } catch (e) {
-      console.warn('Failed to parse relationship file for', contentFileName, e);
-    }
-  }
-
-  return relMap;
-}
-
-/**
- * Augment relationship map using HWPX content manifest (Contents/content.hpf)
- * This file often maps binItem ids to actual BinData/* targets.
- */
-async function augmentRelationshipMapWithContentHpf(zip: JSZip, relMap: RelationshipMap): Promise<RelationshipMap> {
-  const contentHpf = zip.file('Contents/content.hpf');
-  if (!contentHpf) return relMap;
-
-  try {
-    const xml = await contentHpf.async('string');
-    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', trimValues: true });
-    const parsed = parser.parse(xml) as unknown as Record<string, unknown>;
-
-    const idToTarget: RelationshipMap = { ...relMap };
-
-    const visit = (node: unknown, depth: number = 0) => {
-      if (!node || depth > 8) return;
-      if (typeof node === 'object') {
-        const obj = node as Record<string, unknown>;
-        const id = (obj['@_id'] as string) || (obj['@_ID'] as string) || (obj['@_itemID'] as string) || (obj['@_binItem'] as string);
-        const href = (obj['@_Target'] as string) || (obj['@_HRef'] as string) || (obj['@_href'] as string) || (obj['@_path'] as string) || (obj['@_src'] as string);
-        if (id && href && /BinData\//i.test(String(href))) {
-          let target = String(href).replace(/\\/g, '/');
-          if (target.startsWith('/')) target = target.slice(1);
-          // Prefer explicit BinData prefix
-          if (!target.includes('BinData/')) {
-            const tail = target.split('BinData/').pop();
-            if (tail) target = `BinData/${tail}`;
-          }
-          idToTarget[id] = path.posix.normalize(target);
-        }
-
-        for (const value of Object.values(obj)) {
-          visit(value, depth + 1);
-        }
-      } else if (Array.isArray(node)) {
-        for (const item of node) visit(item, depth + 1);
-      }
-    };
-
-    visit(parsed, 0);
-    return idToTarget;
-  } catch (e) {
-    console.warn('Failed to parse content.hpf for binItem mapping:', e);
-    return relMap;
-  }
-}
-
-/**
- * Parse HWP or HWPX buffer and convert to markdown
- */
 export async function parseHwp(
   buffer: Buffer,
-  imageExtractor: ImageExtractor,
-  chartExtractor: ChartExtractor,
-  options: HwpParseOptions = {}
+  images: ImageExtractor,
+  _charts: ChartExtractor,
+  options: HwpParseOptions = {},
+  archive?: Archive
 ): Promise<HwpParseResult> {
   try {
-    const format = detectHwpFormat(buffer);
-    
-    switch (format) {
-      case 'hwp':
-        return await parseHwpBinary(buffer, imageExtractor, chartExtractor, options);
-      case 'hwpx':
-        return await parseHwpxXml(buffer, imageExtractor, chartExtractor, options);
-      default:
-        throw new ParseError('HWP', 'Unsupported HWP format variant');
-    }
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('HWP', message, error as Error);
+    if (buffer.subarray(0, 8).equals(cfbSignature))
+      return await parseBinary(buffer, images, options);
+    if (buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 3, 4])))
+      return await parseHwpx(buffer, images, options, archive);
+    throw new ParseError('HWP', 'Unsupported HWP format variant');
+  } catch (error) {
+    if (error instanceof ConversionError) throw error;
+    throw new ParseError('HWP', 'Could not read the document', error as Error);
   }
 }
 
-/**
- * Detect HWP format based on file signature
- */
-function detectHwpFormat(buffer: Buffer): HwpFormat {
-  if (buffer.length < 4) {
-    return 'unknown';
-  }
-
-  // Check for CFB/OLE2 signature (HWP binary format)
-  if (buffer.length >= 8) {
-    const cfbSignature = buffer.subarray(0, 8);
-    const expectedCfb = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
-    if (cfbSignature.equals(expectedCfb)) {
-      return 'hwp';
-    }
-  }
-  
-  // Check for ZIP signature (HWPX format)
-  const zipSignature = buffer.subarray(0, 4);
-  const expectedZip = Buffer.from([0x50, 0x4B, 0x03, 0x04]);
-  if (zipSignature.equals(expectedZip)) {
-    return 'hwpx';
-  }
-  
-  return 'unknown';
-}
-
-/**
- * Parse HWP binary format using hwp.js
- */
-async function parseHwpBinary(
+async function parseHwpx(
   buffer: Buffer,
-  imageExtractor: ImageExtractor,
-  _chartExtractor: ChartExtractor,
-  options: HwpParseOptions
+  extractor: ImageExtractor,
+  options: HwpParseOptions,
+  archive?: Archive
 ): Promise<HwpParseResult> {
-  try {
-    // Setup browser polyfills before importing hwp.js
-    setupBrowserPolyfills();
-    
-    // Dynamic import of hwp.js to handle potential loading issues
-    const { Viewer } = await import('hwp.js');
-    
-    // Convert Buffer to Uint8Array for hwp.js
-    const uint8Array = new Uint8Array(buffer);
-    
-    // Create a virtual DOM environment for hwp.js
-    const dom = new JSDOM('<!DOCTYPE html><html><body><div id="hwp-container"></div></body></html>', {
-      pretendToBeVisual: true,
-      resources: "usable"
-    });
-    const originalDocument = global.document;
-    const originalWindow = global.window;
-    const originalIntersectionObserver = global.IntersectionObserver;
-    const originalResizeObserver = global.ResizeObserver;
-    const originalMutationObserver = global.MutationObserver;
-    
-    // Set global DOM objects for hwp.js
-    global.document = dom.window.document;
-    global.window = dom.window as unknown as Window & typeof globalThis;
-    
-    // Ensure our polyfills are available in the DOM window as well
-    if (!(dom.window as unknown as { IntersectionObserver: unknown }).IntersectionObserver) {
-      (dom.window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = global.IntersectionObserver;
-    }
-    if (!(dom.window as unknown as { ResizeObserver: unknown }).ResizeObserver) {
-      (dom.window as unknown as { ResizeObserver: unknown }).ResizeObserver = global.ResizeObserver;
-    }
-    if (!(dom.window as unknown as { MutationObserver: unknown }).MutationObserver) {
-      (dom.window as unknown as { MutationObserver: unknown }).MutationObserver = global.MutationObserver;
-    }
-    
-    try {
-      const container = global.document.getElementById('hwp-container');
-      if (!container) {
-        throw new Error('Failed to create container element');
-      }
-      
-      // Initialize hwp.js viewer with error handling
-      let viewer: unknown;
-      try {
-        viewer = new Viewer(container, uint8Array);
-        
-        // Check if viewer was created successfully
-        if (!viewer) {
-          throw new Error('Viewer instance is null or undefined');
-        }
-        
-        
-      } catch (viewerError) {
-        console.warn('Failed to initialize hwp.js Viewer:', viewerError);
-        throw new Error(`hwp.js Viewer initialization failed: ${viewerError instanceof Error ? viewerError.message : 'Unknown error'}`);
-      }
-      
-      // Wait longer for viewer to process the document and render content
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // Try multiple approaches to extract actual content
-      let textContent: string[] = [];
-      
-      // Attempt 1: Extract from viewer container
-      textContent = extractTextFromViewer(container);
-      
-      // Attempt 2: If no meaningful content found, try direct viewer access
-      if (textContent.length === 0 || isOnlyCopyrightMessage(textContent)) {
-        textContent = extractFromViewerInstance(viewer, container);
-      }
-      
-      // Attempt 3: If still no content, try broader DOM extraction
-      if (textContent.length === 0 || isOnlyCopyrightMessage(textContent)) {
-        textContent = extractFromEntireContainer(container);
-      }
-      
-      // Parse images if requested
-      const images = options.extractImages !== false ? 
-        await extractHwpImages(container, imageExtractor) : [];
-      
-      // Convert to markdown
-      const markdown = convertHwpContentToMarkdown(textContent);
-      
-      return {
-        markdown,
-        images,
-        charts: [], // hwp.js doesn't directly expose chart data
-        metadata: { 
-          format: 'hwp', 
-          parser: 'hwp.js',
-          totalParagraphs: textContent.length
-        }
-      };
-      
-    } finally {
-      // Restore global objects
-      global.document = originalDocument;
-      global.window = originalWindow;
-      if (originalIntersectionObserver !== undefined) {
-        global.IntersectionObserver = originalIntersectionObserver;
-      }
-      if (originalResizeObserver !== undefined) {
-        global.ResizeObserver = originalResizeObserver;
-      }
-      if (originalMutationObserver !== undefined) {
-        global.MutationObserver = originalMutationObserver;
-      }
-    }
-    
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('HWP', `Failed to parse HWP file with hwp.js: ${message}`, error as Error);
-  }
-}
-
-/**
- * Parse HWPX XML format using JSZip and fast-xml-parser
- */
-async function parseHwpxXml(
-  buffer: Buffer,
-  imageExtractor: ImageExtractor,
-  _chartExtractor: ChartExtractor,
-  options: HwpParseOptions
-): Promise<HwpParseResult> {
-  try {
-    // Create secure ZIP extractor if security options are provided
-    let secureExtractor: SecureZipExtractor | undefined;
-    if (options.options) {
-      const securityConfig = createZipSecurityConfig(options.options);
-      secureExtractor = new SecureZipExtractor(securityConfig);
-    }
-
-    const zip = await JSZip.loadAsync(buffer);
-    
-    // Validate ZIP archive for security if extractor is available
-    if (secureExtractor) {
-      try {
-        await secureExtractor.validate(zip);
-      } catch (error) {
-        if (error instanceof SecurityError) {
-          throw new SecurityError(
-            `HWPX security validation failed: ${error.message}`,
-            error.securityCode,
-            error.severity,
-            error
-          );
-        }
-        throw error;
-      }
-    }
-    
-    // Log all files in the ZIP for debugging
-    const allFiles = Object.keys(zip.files);
-    
-    // Find main content files in HWPX (OWPML format)
-    // HWPX structure typically has sections in Contents/section0.xml, section1.xml, etc.
-    const contentFiles = [
-      'Contents/section0.xml',
-      'Contents/section1.xml',
-      'Contents/content.hpf',
-      'Contents/header.xml',
-      'Contents/content.xml',
-      'content.xml',
-      'Contents/document.xml',
-      'document.xml',
-      'Contents/body.xml',
-      'body.xml',
-      'version.xml',
-      'mimetype'
-    ];
-    
-    // Try to find any section files
-    const sectionFiles = allFiles.filter(f => f.match(/Contents\/section\d+\.xml/));
-
-    // Try to find XML files
-    const xmlFiles = allFiles.filter(f => f.endsWith('.xml'));
-    
-    let contentFile = null;
-    let contentFileName = '';
-    
-    // First try section files
-    if (sectionFiles.length > 0) {
-      contentFileName = sectionFiles[0];
-      contentFile = zip.file(contentFileName);
-    }
-    
-    // Then try our known content files
-    if (!contentFile) {
-      for (const fileName of contentFiles) {
-        contentFile = zip.file(fileName);
-        if (contentFile) {
-          contentFileName = fileName;
-          break;
-        }
-      }
-    }
-    
-    // If still not found, try any XML file
-    if (!contentFile && xmlFiles.length > 0) {
-      for (const xmlFile of xmlFiles) {
-        if (!xmlFile.includes('_rels') && !xmlFile.includes('meta')) {
-          contentFile = zip.file(xmlFile);
-          if (contentFile) {
-            contentFileName = xmlFile;
-            break;
-          }
-        }
-      }
-    }
-    
-    if (!contentFile) {
-      // Create a more informative error message
-      const fileList = allFiles.slice(0, 10).join(', ');
-      const moreFiles = allFiles.length > 10 ? ` ... and ${allFiles.length - 10} more files` : '';
-      throw new ParseError('HWPX', `No content XML file found in HWPX archive. Files found: ${fileList}${moreFiles}`);
-    }
-    
-    // Extract images from ZIP if requested (do this before parsing to pass images to parser)
-    const images = options.extractImages !== false ? 
-      await extractHwpxImages(zip, imageExtractor, options.options) : [];
-
-    // Build relationships map for all content files we will parse
-    const relContentFiles = sectionFiles.length > 0 ? sectionFiles.sort() : [contentFileName];
-    let relationshipMap = await buildRelationshipMap(zip, relContentFiles);
-    relationshipMap = await augmentRelationshipMapWithContentHpf(zip, relationshipMap);
-    
-    // Parse all section files if multiple exist
-    let allContent = '';
-    
-    if (sectionFiles.length > 0) {
-      // Process all section files in order
-      for (const sectionFileName of sectionFiles.sort()) {
-        const sectionFile = zip.file(sectionFileName);
-        if (sectionFile) {
-          const xmlContent = await sectionFile.async('string');
-          const parser = new XMLParser({
-            ignoreAttributes: false,
-            attributeNamePrefix: '@_', 
-            textNodeName: '#text',
-            parseAttributeValue: true,
-            trimValues: true
-          });
-          
-          const parsedXml = parser.parse(xmlContent);
-          
-          // Convert each section to markdown and combine
-          const sectionMarkdown = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
-          if (sectionMarkdown && sectionMarkdown.trim()) {
-            allContent += `${sectionMarkdown}\n\n`;
-          }
-        }
-      }
-    } else {
-      // Parse single content file
-      const xmlContent = await contentFile.async('string');
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_', 
-        textNodeName: '#text',
-        parseAttributeValue: true,
-        trimValues: true
-      });
-      
-      const parsedXml = parser.parse(xmlContent);
-      allContent = convertOwpmlToMarkdown(parsedXml, images, relationshipMap);
-    }
-    
-    const markdown = allContent.trim() || '*No readable content found in HWPX file*';
-    
-    return {
-      markdown,
-      images,
-      charts: [], // Basic implementation, can be enhanced later
-      metadata: { 
-        format: 'hwpx', 
-        parser: 'jszip+fast-xml-parser',
-        contentFile: contentFileName,
-        zipEntries: Object.keys(zip.files).length
-      }
-    };
-    
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    throw new ParseError('HWPX', `Failed to parse HWPX file: ${message}`, error as Error);
-  }
-}
-
-/**
- * Check if text is the Korean copyright message from hwp.js
- */
-function isCopyrightMessage(text: string): boolean {
-  const copyrightPatterns = [
-    /본\s*제품은\s*한글과컴퓨터의\s*한\/글\s*문서\s*파일/,
-    /Copyright\s*2020\s*Han\s*Lee/,
-    /hanlee\.dev@gmail\.com/,
-    /개발하였습니다/,
-    /참고하여\s*개발/,
-    /공개\s*문서를\s*참고/
-  ];
-  
-  return copyrightPatterns.some(pattern => pattern.test(text));
-}
-
-/**
- * Check if the entire content array contains only copyright messages
- */
-function isOnlyCopyrightMessage(paragraphs: string[]): boolean {
-  if (paragraphs.length === 0) return true;
-  
-  const nonCopyrightContent = paragraphs.filter(p => !isCopyrightMessage(p) && p.trim().length > 0);
-  return nonCopyrightContent.length === 0;
-}
-
-/**
- * Attempt to extract content directly from hwp.js viewer instance
- */
-function extractFromViewerInstance(viewer: unknown, _container: Element): string[] {
-  const paragraphs: string[] = [];
-  
-  try {
-    // Try to access viewer's internal content if available
-    const viewerObj = viewer as { content?: unknown; document?: unknown; text?: string; pages?: unknown[] };
-    
-    if (viewerObj.text) {
-      const text = viewerObj.text.trim();
-      if (text && !isCopyrightMessage(text)) {
-        paragraphs.push(...text.split(/\n\s*\n/).filter(p => p.trim().length > 0));
-      }
-    }
-    
-    if (viewerObj.pages && Array.isArray(viewerObj.pages)) {
-      for (const page of viewerObj.pages) {
-        const pageObj = page as { text?: string; content?: string };
-        if (pageObj.text && !isCopyrightMessage(pageObj.text)) {
-          paragraphs.push(...pageObj.text.split(/\n\s*\n/).filter(p => p.trim().length > 0));
-        }
-        if (pageObj.content && !isCopyrightMessage(pageObj.content)) {
-          paragraphs.push(...pageObj.content.split(/\n\s*\n/).filter(p => p.trim().length > 0));
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to extract from viewer instance:', e);
-  }
-  
-  return paragraphs.filter(p => !isCopyrightMessage(p));
-}
-
-/**
- * Extract all text from container, including from child elements
- */
-function extractFromEntireContainer(container: Element): string[] {
-  const paragraphs: string[] = [];
-  
-  try {
-    // Get all text nodes recursively
-    const ownerDocument = container.ownerDocument;
-    if (!ownerDocument) {
-      throw new Error('No owner document found');
-    }
-    
-    const walker = ownerDocument.createTreeWalker(
-      container,
-      NodeFilter.SHOW_TEXT,
-      null
+  const source = archive ?? (await loadArchive(buffer, options.options));
+  const sections = Object.keys(source.zip.files)
+    .filter((name) => /^Contents\/section\d+\.xml$/i.test(name))
+    .sort(
+      (a, b) =>
+        Number(a.match(/section(\d+)/i)?.[1]) -
+        Number(b.match(/section(\d+)/i)?.[1])
     );
-    
-    const textNodes: string[] = [];
-    let node = walker.nextNode();
-    while (node !== null) {
-      const text = node.textContent?.trim();
-      if (text && text.length > 2 && !isCopyrightMessage(text)) {
-        textNodes.push(text);
-      }
-      node = walker.nextNode();
-    }
-    
-    // Combine adjacent text nodes and split by natural breaks
-    const combinedText = textNodes.join(' ').trim();
-    if (combinedText) {
-      const lines = combinedText.split(/[\r\n]+/).filter(line => {
-        const trimmed = line.trim();
-        return trimmed.length > 0 && !isCopyrightMessage(trimmed);
-      });
-      paragraphs.push(...lines.map(line => line.trim()));
-    }
-  } catch (e) {
-    console.warn('Failed to extract from entire container:', e);
-    
-    // Final fallback: just get textContent and clean it up
-    const allText = container.textContent?.trim();
-    if (allText && !isCopyrightMessage(allText)) {
-      const cleaned = allText
-        .split(/[\r\n]+/)
-        .map(line => line.trim())
-        .filter(line => line.length > 0 && !isCopyrightMessage(line));
-      paragraphs.push(...cleaned);
-    }
-  }
-  
-  return paragraphs.filter(p => !isCopyrightMessage(p));
-}
-
-/**
- * Extract text content from hwp.js rendered DOM
- */
-function extractTextFromViewer(container: Element): string[] {
-  const paragraphs: string[] = [];
-  
-  // Look for various text-containing elements, with improved hwp.js specific selectors
-  const textSelectors = [
-    // hwp.js specific selectors (v0.0.3 might use these)
-    '.hwp-para',
-    '.hwp-text',
-    '.hwp-line',
-    '.hwp-char',
-    '[data-hwp-text]',
-    '[data-text]',
-    '[data-content]',
-    // Generic selectors as fallback
-    'p',
-    'div[data-type="paragraph"]',
-    'div[data-type="text"]',
-    'span[data-type="text"]',
-    'div[style*="text"]',
-    'span',
-    'div'
-  ];
-  
-  for (const selector of textSelectors) {
-    try {
-      const elements = container.querySelectorAll(selector);
-      elements.forEach(element => {
-        const text = element.textContent?.trim();
-        if (text && text.length > 0 && !paragraphs.includes(text) && !isCopyrightMessage(text)) {
-          paragraphs.push(text);
-        }
-      });
-      
-      // Only break if we found meaningful content (not just copyright)
-      if (paragraphs.length > 0 && !isOnlyCopyrightMessage(paragraphs)) break;
-    } catch {
-      continue; // Try next selector
-    }
-  }
-  
-  // Fallback: get all text content and filter
-  if (paragraphs.length === 0 || isOnlyCopyrightMessage(paragraphs)) {
-    const allText = container.textContent?.trim();
-    if (allText) {
-      // Split by common paragraph separators
-      const lines = allText.split(/\n\s*\n|\r\n\s*\r\n|\n/);
-      const filteredLines = lines
-        .filter(line => line.trim().length > 0)
-        .filter(line => !isCopyrightMessage(line.trim()))
-        .map(line => line.trim());
-      
-      if (filteredLines.length > 0) {
-        paragraphs.length = 0; // Clear any copyright-only content
-        paragraphs.push(...filteredLines);
+  if (!sections.length)
+    throw new InvalidFileError('HWPX has no content sections');
+  const images =
+    options.extractImages === false
+      ? []
+      : await extractor.extractImagesFromZip(
+          source.zip,
+          'BinData/',
+          options.options,
+          source.extractor
+        );
+  const manifest = await readXml(
+    source,
+    'Contents/content.hpf',
+    options.options
+  );
+  const imageTargets = new Map<string, string>();
+  function manifestItems(node: XmlNode | undefined): void {
+    if (!node) return;
+    if (localName(node.name) === 'item') {
+      const id = attr(node, 'id');
+      const encodedHref = attr(node, 'href');
+      const href = encodedHref ? decodeURIComponent(encodedHref) : undefined;
+      if (id && href) {
+        const match = images.find(
+          (image) =>
+            image.originalPath === href ||
+            image.originalPath === href.replace(/^\.\.\//, '')
+        );
+        if (match) imageTargets.set(id, match.originalPath);
       }
     }
+    children(node).forEach(manifestItems);
   }
-  
-  return paragraphs.filter(p => !isCopyrightMessage(p));
+  manifestItems(manifest);
+  const output: string[] = [];
+  const layout = new LayoutParser();
+  for (const section of sections) {
+    checkResources();
+    const root = await readXml(source, section, options.options);
+    if (!root) continue;
+    const rels = await relationships(source, section, options.options);
+    function render(node: XmlNode): string {
+      const name = localName(node.name);
+      if (name === 't' || name === 'TEXT') return escapeMarkdown(text(node));
+      if (name === 'lineBreak') return '\n';
+      if (name === 'tab') return '\t';
+      if (name === 'img' || name === 'pic') {
+        const imageNode = name === 'pic' ? child(node, 'img') : node;
+        const id =
+          attr(imageNode, 'binaryItemIDRef') ??
+          attr(imageNode, 'binItemRef') ??
+          attr(imageNode, 'idRef') ??
+          attr(node, 'r:id');
+        const rel = rels.get(id ?? '');
+        const target =
+          imageTargets.get(id ?? '') ??
+          (rel && !rel.external ? rel.target : undefined);
+        if (target) return extractor.getImageReference(target) ?? '';
+        // A picture can wrap its img node in drawing structures.
+        return children(node).map(render).join('');
+      }
+      if (name === 'tbl') {
+        const rows = children(node, 'tr').map((row) => ({
+          cells: children(row, 'tc').map(
+            (cell) =>
+              ({
+                text: children(cell).map(render).join('').trim(),
+                bold: false,
+                italic: false,
+                alignment: 'left',
+                colSpan: Number(attr(child(cell, 'cellSpan'), 'colSpan')) || 1,
+                rowSpan: Number(attr(child(cell, 'cellSpan'), 'rowSpan')) || 1
+              }) satisfies CellData
+          )
+        }));
+        return `\n\n${layout.parseAdvancedTable({ rows })}\n`;
+      }
+      if (['secPr', 'header', 'footer', 'ctrl', 'linesegarray'].includes(name))
+        return '';
+      const content = children(node).map(render).join('');
+      return name === 'p' ? `${content.trim()}\n\n` : content;
+    }
+    output.push(render(root).trim());
+  }
+  return {
+    markdown: output.filter(Boolean).join('\n\n'),
+    images,
+    charts: [],
+    metadata: { format: 'hwpx', parser: 'sax', sectionCount: sections.length }
+  };
 }
 
-/**
- * Extract images from HWP binary format
- */
-async function extractHwpImages(
-  container: Element,
-  imageExtractor: ImageExtractor
-): Promise<ImageData[]> {
+interface BinaryParagraph {
+  content?: { type: number; value: number | string }[];
+  controls?: BinaryControl[];
+}
+interface BinaryControl {
+  info?: { binID?: number };
+  content?: ({ items?: BinaryParagraph[] } | { items?: BinaryParagraph[] }[])[];
+}
+async function parseBinary(
+  buffer: Buffer,
+  extractor: ImageExtractor,
+  options: HwpParseOptions
+): Promise<HwpParseResult> {
+  // Use the data parser directly. No DOM, observers, global mutation, or render delay.
+  const { parse } = await import('hwp.js');
+  const document = parse(buffer, { type: 'buffer' });
   const images: ImageData[] = [];
-  
-  try {
-    // Look for image elements in the rendered content
-    const imgElements = container.querySelectorAll('img, canvas, [style*="background-image"]');
-    
-    imgElements.forEach((element, index) => {
-      const src = element.getAttribute('src');
-      if (src && src.startsWith('data:')) {
-        // Handle base64 embedded images
-        try {
-          const matches = src.match(/data:image\/([^;]+);base64,(.+)/);
-          if (matches) {
-            const format = matches[1];
-            const base64Data = matches[2];
-            const imageBuffer = Buffer.from(base64Data, 'base64');
-            
-            const filename = `hwp-image-${index + 1}.${format}`;
-            const imagePath = path.join(imageExtractor.imageDirectory, filename);
-            
-            // Note: This is a simplified approach
-            // In a real implementation, you'd save the buffer to disk
-            images.push({
-              originalPath: `hwp-embedded-${index + 1}`,
-              savedPath: imagePath,
-              format,
-              size: imageBuffer.length
-            });
-          }
-        } catch (e) {
-          console.warn(`Failed to process embedded image ${index + 1}:`, e);
-        }
-      }
-    });
-  } catch (e) {
-    console.warn('Failed to extract images from HWP:', e);
-  }
-  
-  return images;
-}
-
-/**
- * Extract images from HWPX ZIP archive
- */
-async function extractHwpxImages(
-  zip: JSZip,
-  imageExtractor: ImageExtractor,
-  securityOptions?: ConvertOptions
-): Promise<ImageData[]> {
-  const images: ImageData[] = [];
-  
-  try {
-    // Look for image files in the ZIP archive - typically in BinData folder
-    const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'];
-    
-    for (const [fileName, file] of Object.entries(zip.files)) {
-      if (!file.dir && imageExtensions.some(ext => fileName.toLowerCase().endsWith(ext))) {
-        try {
-          const imageBuffer = await file.async('nodebuffer');
-          const extension = path.extname(fileName).slice(1).toLowerCase();
-          
-          // Actually save the image to disk using imageExtractor
-          // Pass originalPath and basePath (empty string for base)
-          const savedPath = await imageExtractor.saveImage(imageBuffer, fileName, '');
-          
-          if (savedPath) {
-            images.push({
-              originalPath: fileName,
-              savedPath,
-              format: extension,
-              size: imageBuffer.length
-            });
-            
-          }
-          
-        } catch (e) {
-          console.warn(`Failed to extract image ${fileName}:`, e);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to extract images from HWPX:', e);
-  }
-  
-  return images;
-}
-
-/**
- * Convert HWP text content to markdown
- */
-function convertHwpContentToMarkdown(textContent: string[]): string {
-  // Filter out any remaining copyright messages
-  const filteredContent = textContent.filter(p => !isCopyrightMessage(p) && p.trim().length > 0);
-  
-  if (filteredContent.length === 0) {
-    return '*No readable content found in HWP file. The file may be corrupted, encrypted, or contain only images/graphics.*';
-  }
-  
-  let markdown = '';
-  
-  filteredContent.forEach((paragraph, index) => {
-    if (paragraph.trim().length === 0) return;
-    
-    // Escape tilde characters to prevent strikethrough formatting in markdown
-    const escapedParagraph = paragraph.replace(/~/g, '\\~');
-    
-    // Simple heuristics for formatting
-    if (escapedParagraph.length < 50 && index === 0 && !escapedParagraph.match(/^[0-9]+\./)) {
-      // Likely a title
-      markdown += `# ${escapedParagraph}\n\n`;
-    } else if (escapedParagraph.match(/^[0-9]+\./)) {
-      // Numbered list item
-      markdown += `${escapedParagraph}\n`;
-    } else if (escapedParagraph.match(/^[-•*]/)) {
-      // Bullet list item
-      markdown += `${escapedParagraph}\n`;
-    } else {
-      // Regular paragraph
-      markdown += `${escapedParagraph}\n\n`;
-    }
-  });
-  
-  const result = markdown.trim();
-  
-  // Final check - if we only got copyright or very short content, provide helpful message
-  if (result.length < 10 || isCopyrightMessage(result)) {
-    return '*Unable to extract meaningful content from HWP file. This may be due to the limitations of the hwp.js library version 0.0.3 or the file format. Consider converting the file to HWPX format for better results.*';
-  }
-  
-  return result;
-}
-
-/**
- * Smart join markdown parts with appropriate spacing
- */
-function smartJoinMarkdownParts(parts: string[]): string {
-  if (parts.length === 0) return '';
-  
-  const result: string[] = [];
-  
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i].trim();
-    if (!part) continue;
-    
-    // Add appropriate spacing based on content type and position
-    if (i > 0) {
-      const prevPart = parts[i - 1].trim();
-      
-      // Detect if we should add a paragraph break
-      const shouldAddParagraphBreak = shouldAddParagraphBreakBetween(prevPart, part);
-      
-      if (shouldAddParagraphBreak) {
-        // Add double line break for paragraph separation
-        result.push('');
-        result.push('');
-      } else {
-        // Add single space for sentence continuation
-        result.push(' ');
-      }
-    }
-    
-    // Escape tilde characters to prevent strikethrough formatting in markdown
-    const escapedPart = part.replace(/~/g, '\\~');
-    result.push(escapedPart);
-  }
-  
-  return result.join('');
-}
-
-/**
- * Determine if we should add a paragraph break between two parts
- */
-function shouldAddParagraphBreakBetween(prevPart: string, currentPart: string): boolean {
-  // Images always get paragraph breaks
-  if (prevPart.startsWith('![') || currentPart.startsWith('![')) {
-    return true;
-  }
-  
-  // Headings, list items get paragraph breaks
-  if (currentPart.match(/^#{1,6}\s/) || currentPart.match(/^[-*+]\s/) || currentPart.match(/^\d+\.\s/)) {
-    return true;
-  }
-  
-  // If previous part ends with sentence terminator and current part starts a new sentence
-  const prevEndsWithSentence = /[.!?]$/.test(prevPart);
-  const currentStartsWithNewSentence = /^[A-Z가-힣]/.test(currentPart) && !currentPart.startsWith(',');
-  
-  // If previous part ends with a period that's likely an abbreviation
-  const prevEndsWithAbbreviation = /(약|등|명|년|월|일|시|분|초|km|m|%)$/.test(prevPart);
-  
-  // Add paragraph break if:
-  // 1. Previous part ends with sentence terminator AND current part starts a new sentence
-  // 2. BUT don't add break if it looks like an abbreviation or continuation
-  if (prevEndsWithSentence && currentStartsWithNewSentence && !prevEndsWithAbbreviation) {
-    return true;
-  }
-  
-  // Special patterns that indicate paragraph breaks
-  const paragraphStartPatterns = [
-    /^ㅇ\s/, // Korean bullet point
-    /^그리고/,
-    /^또한/,
-    /^한편/,
-    /^아울러/,
-    /^우선/,
-    /^따라서/,
-    /^그러나/,
-    /^하지만/,
-    /^또는/,
-    /^및/,
-    /^또/,
-    /^이에/,
-    /^여기에/,
-    /^이로써/,
-    /^결국/,
-    /^마지막으로/
-  ];
-  
-  const isParagraphStart = paragraphStartPatterns.some(pattern => pattern.test(currentPart));
-  
-  if (isParagraphStart) {
-    return true;
-  }
-  
-  // Statistical/data patterns that often start new paragraphs
-  const dataPatterns = [
-    /^\*\s/, // Bullet points with asterisk
-    /^\d+%\s?$/, // Percentage alone
-    /^\d+명\s?$/, // Number + "명" (people)
-    /^\d+년\s?$/, // Year
-    /^\d+월\s?$/, // Month
-    /^\d+일\s?$/, // Day
-    /^\d+시\s?$/, // Hour
-    /^\d+분\s?$/, // Minute
-    /^\d+초\s?$/, // Second
-    /^평일\s/,
-    /^주말\s/,
-    /^금요일\s/,
-    /^토요일\s/,
-    /^일요일\s/,
-    /^월요일\s/,
-    /^화요일\s/,
-    /^수요일\s/,
-    /^목요일\s/
-  ];
-  
-  const isDataStart = dataPatterns.some(pattern => pattern.test(currentPart));
-  
-  if (isDataStart && prevEndsWithSentence) {
-    return true;
-  }
-  
-  return false;
-}
-
-/**
- * Convert OWPML structure to markdown
- */
-function convertOwpmlToMarkdown(owpmlData: unknown, images: readonly ImageData[] = [], relationshipMap: RelationshipMap = {}): string {
-  let markdown = '';
-  
-  try {
-    // HWPX uses hp:p for paragraphs and hp:t for text
-    // Navigate the structure to find text nodes and image references
-    const contentItems: {type: 'text' | 'image', content: string, position: number}[] = [];
-    const positionCounter = { value: 0 };
-    
-    // Extract all text content and image references recursively
-    extractContentNodes(owpmlData, contentItems, positionCounter, images, relationshipMap);
-
-    
-    // Sort by position to maintain document order
-    contentItems.sort((a, b) => a.position - b.position);
-    
-    // Build markdown with text and image references
-    if (contentItems.length > 0) {
-      const markdownParts: string[] = [];
-      
-      for (const item of contentItems) {
-        if (item.type === 'text' && item.content.trim().length > 0) {
-          markdownParts.push(item.content);
-        } else if (item.type === 'image' && item.content.trim().length > 0) {
-          markdownParts.push(item.content);
-        }
-      }
-      
-      // Smart joining: use double line breaks for paragraph separation, single line breaks for flow
-      markdown = smartJoinMarkdownParts(markdownParts);
-    }
-    
-    if (!markdown.trim()) {
-      markdown = '*No readable content found in HWPX file*';
-    }
-    
-  } catch (e) {
-    console.warn('Error processing OWPML structure:', e);
-    markdown = '*Error processing HWPX content*';
-  }
-  
-  return markdown;
-}
-
-/**
- * Extract content nodes (text and images) from OWPML structure
- */
-function extractContentNodes(
-  obj: unknown,
-  contentItems: {type: 'text' | 'image', content: string, position: number}[],
-  positionCounter: {value: number},
-  images: readonly ImageData[],
-  relationshipMap: RelationshipMap
-): void {
-  if (!obj) return;
-  
-  // If it's a string and looks like actual text (not XML attribute values)
-  if (typeof obj === 'string') {
-    // Filter out numeric-only strings, single words that look like attribute values
-    const trimmed = obj.trim();
-    if (trimmed && 
-        !trimmed.match(/^[0-9\s.-]+$/) && // Skip pure numbers
-        !trimmed.match(/^[A-Z_]+$/) && // Skip constants like "BOTH", "LEFT_ONLY"
-        trimmed.length > 2 && // Skip very short strings
-        !trimmed.includes('pixel') && // Skip image metadata
-        !trimmed.startsWith('그림입니다') && // Skip image placeholders
-        !trimmed.includes('원본 그림')) { // Skip image descriptions
-      contentItems.push({
-        type: 'text',
-        content: trimmed,
-        position: positionCounter.value++
-      });
-    }
-    return;
-  }
-  
-  // If it's an array, process each item
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      extractContentNodes(item, contentItems, positionCounter, images, relationshipMap);
-    }
-    return;
-  }
-  
-  // If it's an object, look for content
-  if (typeof obj === 'object' && obj !== null) {
-    // Check for image/drawing references in HWPX
-    // HWPX can have hp:pic, PICTURE, IMAGE, or drawing objects
-    if ((obj as Record<string, unknown>)['hp:pic'] || (obj as Record<string, unknown>)['PICTURE'] || (obj as Record<string, unknown>)['IMAGE'] || 
-        (obj as Record<string, unknown>)['hp:draw'] || (obj as Record<string, unknown>)['DRAWING']) {
-      // Try to find a matching image and insert reference
-      const imageRef = findImageReference(obj, images, relationshipMap);
-      if (imageRef) {
-        contentItems.push({
-          type: 'image',
-          content: imageRef,
-          position: positionCounter.value++
+  const imageRefs = new Map<number, string>();
+  if (options.extractImages !== false) {
+    for (const [index, image] of document.info.binData.entries()) {
+      checkResources();
+      const filename = `hwp-image-${index}.${image.extension}`;
+      const data = Buffer.from(image.payload);
+      const savedPath = await extractor.saveImage(data, filename);
+      if (savedPath) {
+        images.push({
+          originalPath: filename,
+          savedPath,
+          size: (await stat(savedPath)).size,
+          format: path.extname(savedPath).slice(1)
         });
+        imageRefs.set(index, extractor.getImageReference(filename) ?? '');
       }
     }
-    
-    // HWPX specific text node handling
-    // Look for hp:p (paragraphs) and hp:t (text) nodes
-    if ((obj as { 'hp:p'?: unknown })['hp:p']) {
-      const paragraphs = Array.isArray((obj as { 'hp:p': unknown })['hp:p']) ? (obj as { 'hp:p': unknown[] })['hp:p'] : [(obj as { 'hp:p': unknown })['hp:p']];
-      for (const para of paragraphs) {
-        extractParagraphContent(para, contentItems, positionCounter, images, relationshipMap);
-      }
-    }
-    
-    // Also check for plain p nodes
-    if ((obj as { p?: unknown }).p) {
-      const paragraphs = Array.isArray((obj as { p: unknown }).p) ? (obj as { p: unknown[] }).p : [(obj as { p: unknown }).p];
-      for (const para of paragraphs) {
-        extractParagraphContent(para, contentItems, positionCounter, images, relationshipMap);
-      }
-    }
-    
-    // Check for TEXT nodes
-    if ((obj as { TEXT?: unknown }).TEXT) {
-      const textNodes = Array.isArray((obj as { TEXT: unknown }).TEXT) ? (obj as { TEXT: unknown[] }).TEXT : [(obj as { TEXT: unknown }).TEXT];
-      for (const textNode of textNodes) {
-        if ((textNode as { '#text'?: string })['#text']) {
-          const text = (textNode as { '#text': string })['#text'].trim();
-          if (text && !isMetadata(text)) {
-            contentItems.push({
-              type: 'text',
-              content: text,
-              position: positionCounter.value++
-            });
+  }
+  function paragraphs(items: BinaryParagraph[], depth = 0): string {
+    if (depth > 64)
+      throw new InvalidFileError('HWP nesting exceeds supported limits');
+    return items
+      .map((paragraph) => {
+        const value = (paragraph.content ?? [])
+          .map((c) =>
+            typeof c.value === 'string'
+              ? c.value
+              : c.value === 9
+                ? '\t'
+                : [10, 13].includes(c.value)
+                  ? '\n'
+                  : ''
+          )
+          .join('');
+        const parts = [escapeMarkdown(value).trim()];
+        for (const control of paragraph.controls ?? []) {
+          const id = control.info?.binID;
+          if (id !== undefined && imageRefs.has(id))
+            parts.push(imageRefs.get(id) ?? '');
+          for (const item of control.content ?? []) {
+            const lists = Array.isArray(item) ? item : [item];
+            parts.push(
+              ...lists.map((list) => paragraphs(list.items ?? [], depth + 1))
+            );
           }
         }
-      }
-    }
-    
-    // Recursively process all properties
-    for (const [key, value] of Object.entries(obj)) {
-      // Skip attribute keys and known metadata keys
-      if (!key.startsWith('@_') && 
-          !key.startsWith('_') &&
-          key !== 'SECDEF' &&
-          key !== 'DOCSUMMARY' &&
-          key !== 'MAPPINGTABLE' &&
-          key !== 'COMPATIBLE_DOCUMENT' &&
-          key !== 'LAYOUTCOMPATIBILITY') {
-        extractContentNodes(value, contentItems, positionCounter, images, relationshipMap);
-      }
-    }
+        return parts.filter(Boolean).join('\n\n');
+      })
+      .filter(Boolean)
+      .join('\n\n');
   }
-}
-
-/**
- * Find image reference based on drawing/picture object
- */
-let globalImageCounter = 0;
-
-function findImageReference(
-  drawingObj: unknown,
-  images: readonly ImageData[],
-  relationshipMap: RelationshipMap
-): string | null {
-  // Reset global counter at the start of each conversion to ensure fresh sequence
-  // This is a simple approach - in production you might want a more sophisticated reset mechanism
-  if (images.length > 0 && globalImageCounter >= images.length * 2) {
-    globalImageCounter = 0;
-  }
-  if (!images || images.length === 0) return null;
-  
-  try {
-    // Try to find an image ID or reference in the drawing object
-    const obj = drawingObj as Record<string, unknown>;
-    
-    // Look for common image reference patterns
-    let imageId: string | null = null;
-    
-    // Helper: recursively search for an image relationship id within the drawing object
-    const findRidDeep = (o: unknown, depth: number = 0): string | null => {
-      if (!o || depth > 4) return null;
-      if (typeof o !== 'object') return null;
-      const r = o as Record<string, unknown>;
-      const directId = (r['@_id'] as string) || (r['@_refId'] as string) || (r['@_href'] as string) ||
-                       (r['@_r:id'] as string) || (r['@_rId'] as string) || (r['@_rid'] as string) ||
-                       (r['refId'] as string) || (r['r:id'] as string);
-      if (directId && typeof directId === 'string') return directId;
-      for (const v of Object.values(r)) {
-        const nested = findRidDeep(v, depth + 1);
-        if (nested) return nested;
-      }
-      return null;
-    };
-
-    imageId = findRidDeep(obj);
-    
-    // If we found an ID, try to match it with our extracted images
-    if (imageId && typeof imageId === 'string') {
-      // Resolve via relationships first (rId -> target path inside zip)
-      // Normalize id to check variants (with/without r:)
-      const variants = [imageId, imageId.startsWith('r:') ? imageId.slice(2) : `r:${imageId}`];
-      const targetPath = variants.map(v => relationshipMap[v]).find(Boolean) as string | undefined;
-      let matchingImage: ImageData | undefined;
-      if (targetPath) {
-        matchingImage = images.find(img => img.originalPath.replace(/\\/g, '/').toLowerCase() === targetPath.toLowerCase());
-        // Also try endsWith for safety if some paths differ in prefixes
-        if (!matchingImage) {
-          matchingImage = images.find(img => targetPath.toLowerCase().endsWith(img.originalPath.replace(/\\/g, '/').toLowerCase()) || img.originalPath.replace(/\\/g, '/').toLowerCase().endsWith(targetPath.toLowerCase()));
-        }
-      }
-      // Fallback to substring match
-      if (!matchingImage && typeof imageId === 'string') {
-        matchingImage = images.find(img => img.originalPath.includes(imageId) || img.savedPath.includes(imageId));
-      }
-      if (matchingImage) {
-        const imageName = path.basename(matchingImage.savedPath);
-        const markdownRef = `![Image](images/${imageName})`;
-        return markdownRef;
-      }
+  const markdown = document.sections
+    .map((section) => paragraphs(section.content as BinaryParagraph[]))
+    .join('\n\n');
+  return {
+    markdown,
+    images,
+    charts: [],
+    metadata: {
+      format: 'hwp',
+      parser: 'hwp.js',
+      sectionCount: document.sections.length
     }
-
-    // If no rId path, look for direct BinData references OR binItem id links
-    const findDirectImageTarget = (o: unknown, depth: number = 0): string | null => {
-      if (!o || depth > 6) return null;
-      if (typeof o === 'string') {
-        const s = o.trim();
-        const m = s.match(/BinData\/[\w.-]+\.(png|jpg|jpeg|gif|bmp|tiff)/i);
-        if (m) return m[0];
-        return null;
-      }
-      if (typeof o === 'object') {
-        const r = o as Record<string, unknown>;
-        // Check common attributes
-        const candidates = [r['@_Target'], r['@_HRef'], r['@_src'], r['@_href'], r['@_path'], r['@_file']];
-        for (const c of candidates) {
-          const found = findDirectImageTarget(c, depth + 1);
-          if (found) return found;
-        }
-        // If binItem id present, map via relationshipMap as a second step
-        const binId = (r['@_binItemRef'] as string) || (r['@_binItem'] as string) || (r['@_idref'] as string) || (r['@_idRef'] as string);
-        if (binId && relationshipMap[binId]) {
-          return relationshipMap[binId];
-        }
-        for (const v of Object.values(r)) {
-          const found = findDirectImageTarget(v, depth + 1);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const directTarget = findDirectImageTarget(obj);
-    if (directTarget) {
-      const targetLc = directTarget.replace(/\\/g, '/').toLowerCase();
-      const matchingImage = images.find(img => {
-        const origLc = img.originalPath.replace(/\\/g, '/').toLowerCase();
-        return origLc === targetLc || origLc.endsWith(targetLc) || targetLc.endsWith(origLc);
-      });
-      if (matchingImage) {
-        const imageName = path.basename(matchingImage.savedPath);
-        const markdownRef = `![Image](images/${imageName})`;
-        return markdownRef;
-      }
-    }
-    
-    // If no specific match found, but we do have extracted images, use a global counter
-    // to ensure each image reference gets a different image in sequence
-    const selected = images[globalImageCounter % images.length];
-    globalImageCounter += 1;
-    
-    if (selected) {
-      const imageName = path.basename(selected.savedPath);
-      const markdownRef = `![Image](images/${imageName})`;
-      return markdownRef;
-    }
-    return null;
-    
-  } catch (e) {
-    console.warn('Error finding image reference:', e);
-  }
-  
-  return null;
-}
-
-/**
- * Extract content from a paragraph node (both text and images)
- */
-function extractParagraphContent(
-  para: unknown,
-  contentItems: {type: 'text' | 'image', content: string, position: number}[],
-  positionCounter: {value: number},
-  images: readonly ImageData[],
-  relationshipMap: RelationshipMap
-): void {
-  if (!para) return;
-  
-  
-  // Check for images/drawings in paragraph first
-  const obj = para as Record<string, unknown>;
-  if (obj['hp:pic'] || obj['PICTURE'] || obj['IMAGE'] || obj['hp:draw'] || obj['DRAWING']) {
-    const imageRef = findImageReference(obj, images, relationshipMap);
-    if (imageRef) {
-      contentItems.push({
-        type: 'image',
-        content: imageRef,
-        position: positionCounter.value++
-      });
-    }
-  }
-  
-  // Extract and combine all text content from this paragraph into a single content item
-  const combinedText = extractCombinedParagraphText(para);
-  if (combinedText && combinedText.trim().length > 0) {
-    contentItems.push({
-      type: 'text',
-      content: combinedText.trim(),
-      position: positionCounter.value++
-    });
-  }
-}
-
-
-/**
- * Extract and combine all text content from a paragraph into a single string
- */
-function extractCombinedParagraphText(para: unknown): string {
-  if (!para) return '';
-  
-  const textSegments: string[] = [];
-  
-  // Look for hp:run or run nodes
-  const runs = (para as { 'hp:run'?: unknown, run?: unknown, RUN?: unknown })['hp:run'] || (para as { run?: unknown })['run'] || (para as { RUN?: unknown })['RUN'];
-  if (runs) {
-    const runArray = Array.isArray(runs) ? runs : [runs];
-    
-    for (const run of runArray) {
-      // Look for hp:t or t nodes (text content)
-      const textNode = (run as { 'hp:t'?: unknown, t?: unknown, T?: unknown, '#text'?: unknown })['hp:t'] || (run as { t?: unknown })['t'] || (run as { T?: unknown })['T'] || (run as { '#text'?: unknown })['#text'];
-      if (textNode) {
-        if (typeof textNode === 'string') {
-          const text = textNode.trim();
-          if (text && !isMetadata(text)) {
-            textSegments.push(text);
-          }
-        } else if ((textNode as { '#text'?: string })['#text']) {
-          const text = (textNode as { '#text': string })['#text'].trim();
-          if (text && !isMetadata(text)) {
-            textSegments.push(text);
-          }
-        }
-      }
-    }
-  }
-  
-  // Also check for direct text content
-  if ((para as { '#text'?: string })['#text']) {
-    const text = (para as { '#text': string })['#text'].trim();
-    if (text && !isMetadata(text)) {
-      textSegments.push(text);
-    }
-  }
-  
-  // Check for TEXT child nodes
-  if ((para as { TEXT?: unknown }).TEXT) {
-    const textNodes = Array.isArray((para as { TEXT: unknown }).TEXT) ? (para as { TEXT: unknown[] }).TEXT : [(para as { TEXT: unknown }).TEXT];
-    for (const textNode of textNodes) {
-      if ((textNode as { '#text'?: string })['#text']) {
-        const text = (textNode as { '#text': string })['#text'].trim();
-        if (text && !isMetadata(text)) {
-          textSegments.push(text);
-        }
-      } else if (typeof textNode === 'string') {
-        const text = textNode.trim();
-        if (text && !isMetadata(text)) {
-          textSegments.push(text);
-        }
-      }
-    }
-  }
-  
-  // Combine all text segments with single spaces
-  const combinedText = textSegments.join(' ');
-  
-  return combinedText;
-}
-
-/**
- * Check if a string looks like metadata rather than document content
- */
-function isMetadata(text: string): boolean {
-  // Filter out common metadata patterns
-  return text.match(/^[A-Z_]+$/) !== null || // Constants
-         text.match(/^[0-9\s.-]+$/) !== null || // Pure numbers
-         text.includes('pixel') || // Image metadata
-         text.startsWith('그림입니다') || // Korean "This is an image"
-         text.includes('원본 그림') || // Korean "Original image"
-         text.includes('.jpg') || // File names
-         text.includes('.png') ||
-         text.includes('.bmp') ||
-         text.includes('http://') || // URLs in metadata
-         text.length < 3; // Very short strings
+  };
 }

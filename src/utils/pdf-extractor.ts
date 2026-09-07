@@ -1,3 +1,4 @@
+import { escapeMarkdown } from './markdown.js';
 interface TableRow {
   readonly cells: readonly string[];
 }
@@ -15,49 +16,21 @@ export interface PDFParseResult {
 }
 
 export class PDFExtractor {
-  private pageCounter: number = 0;
-
-  constructor() {
-    // No longer needs image extractor - PDF text only
-  }
-
-  /**
-   * Extract text from PDF - no image extraction
-   */
-  async extractTextFromPDF(buffer: Buffer): Promise<{ text: string; pageCount: number; metadata: Record<string, unknown> }> {
-    try {
-      console.log('📄 PDFExtractor: Extracting text content only...');
-      
-      // Parse the PDF to get text content
-      const pdfParse = await import('pdf-parse');
-      const pdfData = await pdfParse.default(buffer);
-      
-      console.log(`📊 PDFExtractor: PDF has ${pdfData.numpages} pages, text length: ${pdfData.text?.length || 0}`);
-      
-      return {
-        text: pdfData.text || '',
-        pageCount: pdfData.numpages || 0,
-        metadata: pdfData.metadata || {}
-      };
-    } catch (error: unknown) {
-      console.warn('⚠️ PDFExtractor failed to extract text:', error instanceof Error ? error.message : 'Unknown error');
-      throw error;
-    }
-  }
-
-
   /**
    * Enhance text with layout detection
    */
-  async enhanceTextWithLayout(text: string, _pdfData?: unknown): Promise<string> {
+  async enhanceTextWithLayout(
+    text: string,
+    _pdfData?: unknown
+  ): Promise<string> {
     const lines = text.split('\n');
     let enhancedText = '';
     let inTable = false;
     let tableRows: TableRow[] = [];
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      
+
       if (!line) {
         // Handle empty lines
         if (inTable) {
@@ -68,7 +41,16 @@ export class PDFExtractor {
         enhancedText += '\n';
         continue;
       }
-      
+
+      if (this.isListItem(line)) {
+        if (inTable) {
+          enhancedText += this.formatTableRows(tableRows);
+          tableRows = [];
+          inTable = false;
+        }
+        enhancedText += `${this.formatListItem(line)}\n`;
+        continue;
+      }
       // Detect headings (lines that are short and followed by content)
       if (this.isLikelyHeading(line, lines, i)) {
         if (inTable) {
@@ -76,12 +58,12 @@ export class PDFExtractor {
           tableRows = [];
           inTable = false;
         }
-        
+
         const headingLevel = this.determineHeadingLevel(line);
-        enhancedText += `${'#'.repeat(headingLevel)} ${line}\n\n`;
+        enhancedText += `${'#'.repeat(headingLevel)} ${escapeMarkdown(line)}\n\n`;
         continue;
       }
-      
+
       // Detect table-like content
       if (this.isLikelyTableRow(line)) {
         if (!inTable) {
@@ -95,49 +77,48 @@ export class PDFExtractor {
         tableRows = [];
         inTable = false;
       }
-      
-      // Detect lists
-      if (this.isListItem(line)) {
-        enhancedText += `${this.formatListItem(line)}\n`;
-        continue;
-      }
-      
+
       // Regular paragraph
-      enhancedText += `${line}\n`;
+      enhancedText += `${escapeMarkdown(line)}\n`;
     }
-    
+
     // Handle any remaining table
     if (inTable && tableRows.length > 0) {
       enhancedText += this.formatTableRows(tableRows);
     }
-    
+
     return enhancedText;
   }
 
-  private isLikelyHeading(line: string, allLines: readonly string[], index: number): boolean {
+  private isLikelyHeading(
+    line: string,
+    allLines: readonly string[],
+    index: number
+  ): boolean {
     // Check if line looks like a heading
     if (line.length > 80) return false; // Too long to be a heading
-    if (line.length < 3) return false;  // Too short
-    
+    if (line.length < 3) return false; // Too short
+
     // Check if it's all caps (common for headings)
-    if (line === line.toUpperCase() && line.length > 5) return true;
-    
+    if (/[A-Z]/.test(line) && line === line.toUpperCase() && line.length > 5)
+      return true;
+
     // Check if followed by a longer paragraph
     const nextLine = allLines[index + 1];
     if (nextLine && nextLine.trim().length > line.length * 1.5) {
       return true;
     }
-    
+
     // Check if it ends with a colon (section header)
     if (line.endsWith(':')) return true;
-    
+
     return false;
   }
 
   private determineHeadingLevel(line: string): number {
-    if (line === line.toUpperCase()) return 1; // All caps = major heading
-    if (line.endsWith(':')) return 2;         // Ends with colon = section
-    if (line.length < 30) return 3;           // Short = subsection
+    if (/[A-Z]/.test(line) && line === line.toUpperCase()) return 1; // All caps = major heading
+    if (line.endsWith(':')) return 2; // Ends with colon = section
+    if (line.length < 30) return 3; // Short = subsection
     return 2; // Default
   }
 
@@ -145,49 +126,52 @@ export class PDFExtractor {
     // Look for patterns that suggest tabular data
     const patterns = [
       /\t+/,
-      /\s{3,}/,                 // Multiple spaces
-      /\|/,                     // Pipe separated
+      /\s{3,}/, // Multiple spaces
+      /\|/, // Pipe separated
       /\s+\d+\s+/,
-      /^\s*\d+\.\s+/,
+      /^\s*\d+\.\s+/
     ];
-    
-    return patterns.some(pattern => pattern.test(line));
+
+    return patterns.some((pattern) => pattern.test(line));
   }
 
   private parseTableRow(line: string): readonly string[] {
     // Split line into columns based on various separators
     let columns: string[] = [];
-    
+
     if (line.includes('\t')) {
-      columns = line.split('\t').map(col => col.trim());
+      columns = line.split('\t').map((col) => col.trim());
     } else if (line.includes('|')) {
-      columns = line.split('|').map(col => col.trim());
+      columns = line.split('|').map((col) => col.trim());
     } else {
       // Split on multiple spaces
-      columns = line.split(/\s{2,}/).map(col => col.trim());
+      columns = line.split(/\s{2,}/).map((col) => col.trim());
     }
-    
-    return columns.filter(col => col.length > 0);
+
+    return columns.filter((col) => col.length > 0);
   }
 
   private formatTableRows(rows: readonly TableRow[]): string {
     if (rows.length === 0) return '';
-    
+
     // Find maximum number of columns
-    const maxCols = Math.max(...rows.map(row => row.cells.length));
-    
+    const maxCols = rows.reduce(
+      (max, row) => Math.max(max, row.cells.length),
+      0
+    );
+
     let markdown = '';
-    
+
     for (const [i, row] of rows.entries()) {
       let rowMarkdown = '|';
-      
+
       for (let j = 0; j < maxCols; j++) {
-        const cell = row.cells[j] || '';
+        const cell = escapeMarkdown(row.cells[j] || '').replace(/\|/g, '\\|');
         rowMarkdown += ` ${cell} |`;
       }
-      
+
       markdown += `${rowMarkdown}\n`;
-      
+
       // Add header separator after first row
       if (i === 0) {
         let separator = '|';
@@ -197,7 +181,7 @@ export class PDFExtractor {
         markdown += `${separator}\n`;
       }
     }
-    
+
     return `${markdown}\n`;
   }
 
@@ -207,10 +191,10 @@ export class PDFExtractor {
       /^\s*[-•·]\s+/,
       /^\s*\d+\.\s+/,
       /^\s*[a-zA-Z]\.\s+/,
-      /^\s*[ivx]+\.\s+/i,
+      /^\s*[ivx]+\.\s+/i
     ];
-    
-    return listPatterns.some(pattern => pattern.test(line));
+
+    return listPatterns.some((pattern) => pattern.test(line));
   }
 
   private formatListItem(line: string): string {
@@ -224,20 +208,5 @@ export class PDFExtractor {
     } else {
       return line.replace(/^\s*[-•·]\s+/, '- ');
     }
-  }
-
-
-  /**
-   * Reset internal counters
-   */
-  reset(): void {
-    this.pageCounter = 0;
-  }
-
-  /**
-   * Get current page counter
-   */
-  get currentPageCount(): number {
-    return this.pageCounter;
   }
 }

@@ -11,44 +11,47 @@ export default tseslint.config(
       '*.js',
       '*.d.ts',
       '.eslintrc.cjs'
-    ],
+    ]
   },
   {
     files: ['src/**/*.ts'],
     extends: [
       eslint.configs.recommended,
       ...tseslint.configs.recommended,
-      ...tseslint.configs.stylistic,
+      ...tseslint.configs.stylistic
     ],
     languageOptions: {
       globals: {
-        ...globals.node,
+        ...globals.node
       },
       parserOptions: {
-        project: './tsconfig.json',
-      },
+        project: './tsconfig.json'
+      }
     },
     rules: {
       // TypeScript specific rules
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_' }
+      ],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-non-null-assertion': 'warn',
       '@typescript-eslint/no-inferrable-types': 'off',
-      
+
       // General rules
       'no-console': 'off', // Allow console for debugging
       'prefer-const': 'error',
       'no-var': 'error',
       'object-shorthand': 'error',
       'prefer-template': 'error',
-      
+
       // Import/export rules
       'no-duplicate-imports': 'error',
-      
+
       // Best practices
-      'eqeqeq': ['error', 'always'],
+      eqeqeq: ['error', 'always'],
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
@@ -56,15 +59,15 @@ export default tseslint.config(
       'no-self-compare': 'error',
       'no-throw-literal': 'error',
       'no-unused-expressions': 'error',
-      'radix': 'error'
-    },
+      radix: 'error'
+    }
   },
   {
     files: ['**/*.test.ts', '**/*.spec.ts'],
     languageOptions: {
       globals: {
-        ...globals.jest,
-      },
+        ...globals.jest
+      }
     },
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
