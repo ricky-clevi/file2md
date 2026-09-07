@@ -1,36 +1,87 @@
 # file2md
 
 Convert PDF, DOCX, XLSX, PPTX, HWP, and HWPX documents to Markdown in Node.js.
-Returns Markdown, extracted image paths, chart data, and processing metadata.
+Use it to prepare documents for search, knowledge bases, or content pipelines.
+One API returns Markdown, extracted image paths, cached chart data, and metadata.
 
 **English** | [한국어](README.ko.md)
 
+[npm](https://www.npmjs.com/package/file2md) · [Source](https://github.com/ricky-clevi/file2md) · [Report an issue](https://github.com/ricky-clevi/file2md/issues)
+
+[Quick start](#quick-start) · [Examples](#examples) · [Supported formats](#supported-formats) · [Options](#options) · [Result](#result) · [Errors and resource limits](#errors-and-resource-limits)
+
 ## Installation
 
-Requires **Node.js 20.9 or later**.
+Requires **Node.js 20.9 or later**. Supports JavaScript and TypeScript through
+ESM and CommonJS, with bundled type declarations. This is a Node.js library;
+it does not include a CLI or browser build.
 
 ```sh
 npm install file2md
 ```
 
-## Usage
+## Quick start
 
-```ts
+Create `convert.mjs` beside a document named `report.docx`:
+
+```js
+import { writeFile } from 'node:fs/promises';
 import { convert } from 'file2md';
 
 const result = await convert('./report.docx', {
-  imageDir: './report-images',
-  preserveLayout: true,
-  extractImages: true,
-  extractCharts: true,
+  imageDir: './images/report',
 });
 
-console.log(result.markdown);
-console.log(result.images);
+await writeFile('./report.md', result.markdown, 'utf8');
 console.log(result.metadata);
 ```
 
-CommonJS is also supported:
+Run it with `node convert.mjs`. This writes `report.md` in the current working
+directory and saves supported embedded images under `images/report/`. Keep that
+folder alongside the Markdown file so its image references continue to resolve.
+Layout preservation, image extraction, and chart extraction are enabled by default
+where the format supports them.
+
+`convert(input, options?)` returns a `Promise<ConversionResult>`. Input can be a
+local file path or a Node.js `Buffer`; the format is detected from the file contents.
+The library does not download URLs or save Markdown automatically. The example
+above handles saving with Node's `writeFile`.
+
+## Examples
+
+### Convert a Buffer
+
+Useful when your application already has the document bytes:
+
+```js
+import { readFile } from 'node:fs/promises';
+import { convert } from 'file2md';
+
+const buffer = await readFile('./report.xlsx');
+const result = await convert(buffer);
+console.log(result.markdown);
+```
+
+### Convert content without saving images
+
+```js
+import { convert } from 'file2md';
+
+const { markdown } = await convert('./report.docx', {
+  preserveLayout: false,
+  extractImages: false,
+  extractCharts: false,
+});
+
+console.log(markdown);
+```
+
+This disables style enhancements and image/chart extraction. The output is still
+Markdown, and tables retain their structure. No image directory is created.
+
+### Use CommonJS and limit PDF pages
+
+Save as a `.cjs` file or use it in a CommonJS project:
 
 ```js
 const { convert } = require('file2md');
@@ -38,13 +89,29 @@ const { convert } = require('file2md');
 async function main() {
   const result = await convert('./report.pdf', { maxPages: 10 });
   console.log(result.markdown);
+  console.log(result.metadata.pageCount);
 }
+
 main().catch(console.error);
 ```
 
-`convert()` accepts a local file path or a Node.js `Buffer`. It detects the format
-from the contents, not the extension. It does not download URLs or write a
-Markdown file. Save `result.markdown` yourself if needed.
+`maxPages` applies only to PDF. It limits actual text extraction, rather than
+truncating the metadata after reading all pages.
+
+## Supported formats
+
+| Format | Implementation and limits |
+| --- | --- |
+| PDF | PDF.js through `unpdf`, with optional heading/list/table heuristics. No OCR or image extraction. |
+| DOCX | Paragraph/table order, run formatting, headings, lists, hyperlinks, images, and cached charts. Does not reproduce Word page layout or every inherited style. |
+| XLSX | Workbook relationship order, shared/inline strings, booleans, cached formula values, common dates/percentages, cell styling, and charts. Does not evaluate formulas or reproduce every Excel number format. Empty row gaps are compacted. |
+| PPTX | Presentation relationship order, grouped text, tables, images, and charts. Produces document content, not screenshots or pixel-perfect slide layouts. |
+| HWP | Uses the `hwp.js` data parser without a browser/DOM. Extracts text and embedded images from supported HWP 5 documents. Binary tables are flattened; encrypted/unsupported variants may fail. |
+| HWPX | Ordered XML sections, paragraphs, tables, and manifest/relationship image references. Preserves short and numeric text. |
+
+Markdown cannot represent all merged-cell, positioning, font, and drawing
+features. Table spans are approximated with empty grid cells. Scanned PDFs need
+an OCR tool before conversion.
 
 ## Options
 
@@ -65,12 +132,16 @@ Markdown file. Save `result.markdown` yourself if needed.
 | `enablePathValidation` | `true` | Checks original ZIP entry names for traversal, absolute paths, and reserved names. |
 | `enableXXEProtection` | `true` | Compatibility option. DTDs and external entities remain prohibited even when false. |
 
-Numeric limits must be positive safe integers. PDF, HWP, and native image
+Size and memory limits are in **bytes**; `timeout` is in **milliseconds**. For
+example, `maxFileSize: 20 * 1024 * 1024` sets a 20 MiB input limit. Numeric limits
+must be positive safe integers. PDF, HWP, and native image
 processing load lazily, so importing the library does not initialize them.
 
 ## Result
 
 ```ts
+import type { ImageData, ChartData, DocumentMetadata } from 'file2md';
+
 interface ConversionResult {
   readonly markdown: string;
   readonly images: readonly ImageData[];
@@ -79,29 +150,15 @@ interface ConversionResult {
 }
 ```
 
-Each image includes `originalPath`, `savedPath`, and, where available, its format
-and byte size. Chart data includes its type, title, categories, and named numeric
+Each image includes `originalPath`, an absolute filesystem `savedPath`, and,
+where available, its format and byte size. Markdown image URLs are generated
+separately from the configured image directory. Chart data includes its type, title, categories, and named numeric
 series. Metadata includes `fileType`, `mimeType`, `pageCount`, `imageCount`,
 `chartCount`, `processingTime`, and format-specific `additional` information.
 
 `pageCount` means processed PDF pages, workbook sheets, or presentation slides.
 For DOCX and HWP/HWPX it is `1`; the library does not paginate those formats.
 HWP/HWPX section counts are available in `metadata.additional.sectionCount`.
-
-## Format behavior
-
-| Format | Implementation and limits |
-| --- | --- |
-| PDF | PDF.js through `unpdf`, with optional heading/list/table heuristics. No OCR or image extraction. |
-| DOCX | Paragraph/table order, run formatting, headings, lists, hyperlinks, images, and cached charts. Does not reproduce Word page layout or every inherited style. |
-| XLSX | Workbook relationship order, shared/inline strings, booleans, cached formula values, common dates/percentages, cell styling, and charts. Does not evaluate formulas or reproduce every Excel number format. Empty row gaps are compacted. |
-| PPTX | Presentation relationship order, grouped text, tables, images, and charts. Produces document content, not screenshots or pixel-perfect slide layouts. |
-| HWP | Uses the `hwp.js` data parser without a browser/DOM. Extracts text and embedded images from supported HWP 5 documents. Binary tables are flattened; encrypted/unsupported variants may fail. |
-| HWPX | Ordered XML sections, paragraphs, tables, and manifest/relationship image references. Preserves short and numeric text. |
-
-Markdown cannot represent all merged-cell, positioning, font, and drawing
-features. Table spans are approximated with empty grid cells. Scanned PDFs need
-an OCR tool before conversion.
 
 ## Images and output paths
 
@@ -154,23 +211,21 @@ Memory checks observe the whole Node.js process, not an isolated conversion.
 Deadlines reject asynchronous work and are checked throughout parsing; JavaScript
 cannot interrupt a synchronous parser or native operation already executing.
 For a hard CPU/memory boundary around hostile files, run conversion in a separate
-worker or process with operating-system limits. A failed conversion may leave
+process with operating-system limits. A failed conversion may leave
 images already written before the error; use a per-document output directory.
 
-## Changes from the previous implementation
+## Upgrading from the previous implementation
 
-- Minimum Node version is now 20.9, required by the patched Sharp dependency.
-- ESM and CommonJS entry points share one implementation and TypeScript declarations.
-- PDF extraction uses `unpdf` instead of `pdf-parse` and respects page limits.
-- One ordered SAX-based XML reader replaces overlapping XML parsers.
-- Removed JSDOM, browser polyfills, fixed render delays, and unused visual parsing.
-- Corrected ZIP/XML validation that rejected normal Office documents.
-- Image paths honor custom directories and filenames no longer collide.
-- `preserveLayout: false` disables supported style enhancements.
+Review these changes if your application depends on the previous output:
 
-These changes affect the Node support range, Markdown formatting, and generated
-image filenames. Consumers relying on the previous output should review those
-changes before upgrading.
+- **Runtime:** Node.js 20.9+ is required.
+- **Images:** filenames now include a content hash. Use `result.images` instead of
+  predicting filenames; custom image directories are respected across formats.
+- **Markdown:** corrected block ordering, relationships, and text decoding can
+  change generated output. `preserveLayout: false` disables supported styling.
+- **PDF:** `maxPages` now limits extraction itself and reports only processed pages.
+
+ESM and CommonJS share one implementation, including error/class identity.
 
 ## Development and publishing
 
@@ -186,15 +241,42 @@ The build generates an ESM entry point in `dist/` and a shared CommonJS implemen
 in `dist/cjs/`. Both entry points share error/class identity. Runtime dependencies
 are external; source files, test fixtures, and source maps are not shipped.
 
-`npm run release:dry` validates and previews the package contents locally without changing the
-version. `npm run release` validates, checks npm authentication, increments the
-patch version in both manifests, and publishes. `npm run release:retry` skips
-incrementing the version. Select an appropriate major/minor version manually
-before publishing breaking changes; the scripts only increment patches.
+### Publish from GitHub Actions
 
-The `main` workflow publishes after validation and records the published version
-and tag. Pull requests and other branches run CI without publishing. Publishing
-requires repository npm/GitHub credentials; those workflows do not run merely
-from installing or building the package locally.
+The workflow in [`.github/workflows/publish.yml`](https://github.com/ricky-clevi/file2md/blob/main/.github/workflows/publish.yml)
+checks pushes to `main` and publishes when its tracked source/build files differ
+from the latest Git tag, or when no tag exists.
 
-MIT license.
+1. Add an npm publishing credential as the repository Actions secret **`NPM_TOKEN`**.
+   Checkout, version commits, tags, and GitHub releases use the built-in
+   `GITHUB_TOKEN`; no separate `GH_TOKEN` secret is required.
+2. Push the changes to `main`. The workflow installs dependencies, runs lint,
+   type checking and tests, and builds the package.
+3. If a release is needed, it increments the patch version in `package.json` and
+   `package-lock.json`, publishes to npm, then records the version commit, tag,
+   and GitHub release.
+
+After correcting a missing credential, use **Re-run all jobs** on the failed
+Actions run. Check that the **Publish package** step succeeded; a successful
+build alone does not mean the version is available on npm.
+
+README-only changes do not trigger a new npm version once the tracked files match
+the latest tag. They appear on npm with the next package release. Pull requests
+and other branches run CI without publishing.
+
+### Local release commands
+
+| Command | Behavior |
+| --- | --- |
+| `npm run release:dry` | Runs validation and previews the package without changing the version or publishing. |
+| `npm run release` | Validates, checks npm authentication, increments the patch version in both manifests, then publishes. |
+| `npm run release:retry` | Validates and publishes the current version without incrementing it; use only for an unpublished version. |
+
+The release scripts increment **patch versions only**. For a breaking release,
+choose the major version explicitly and account for the workflow's automatic
+increment before publishing. Local release commands do not create Git commits,
+tags, or GitHub releases; installing or building the package never publishes it.
+
+## License
+
+[MIT](LICENSE).
