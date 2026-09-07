@@ -14,7 +14,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -54,6 +53,6 @@ jobs:
       - name: Create release
         if: steps.changes.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.number }}
         run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes
